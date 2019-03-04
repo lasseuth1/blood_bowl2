@@ -54,6 +54,9 @@ def main():
         while not done:
 
             for step in range(num_steps):
+                if done:
+                    env.reset()
+                    break
 
                 available_actions = env.available_action_types()
                 value, action = ac_agent.act(Variable(memory.spatial_obs[step]), Variable(memory.non_spatial_obs[step]))
