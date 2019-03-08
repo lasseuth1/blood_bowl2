@@ -17,7 +17,8 @@ def main():
 
     env = gym.make("FFAI-3-v1")
     spatial_obs_space = env.observation_space.spaces['board'].shape
-    non_spatial_space = (1,7)
+    # non_spatial_space = (1, 7)
+    non_spatial_space = (1, 49)
     action_space = len(env.actions)
     ac_agent = CNNPolicy(spatial_obs_space[0], action_space)
 
@@ -30,6 +31,7 @@ def main():
     gamma = 0.99
 
     optimizer = optim.RMSprop(ac_agent.parameters(), learning_rate, eps=epsilon, alpha=alpha)
+    # optimizer = optim.Adam(ac_agent.parameters(), learning_rate)
     number_of_games = 10000
 
     # Creating the memory to store the steps taken
@@ -47,26 +49,22 @@ def main():
 
         legal_actions = 0
         non_legal_actions = 0
-        reward_this_episode = 0
-        number_of_steps = 0
         done = False
 
         while not done:
 
             for step in range(num_steps):
-                if done:
-                    env.reset()
-                    break
 
                 available_actions = env.available_action_types()
                 value, action = ac_agent.act(Variable(memory.spatial_obs[step]), Variable(memory.non_spatial_obs[step]))
                 # chosen_action = action[0]
                 chosen_action = action.data.squeeze(0).numpy()
-                available_positions = env.available_positions(chosen_action[0])
 
                 if chosen_action in available_actions:
-                    legal_actions += 1
+                    # random_action = rnd.choice(available_actions)
+                    available_positions = env.available_positions(chosen_action[0])
                     pos = rnd.choice(available_positions) if len(available_positions) > 0 else None
+
                     action_object = {
                         'action-type': chosen_action[0],
                         'x': pos.x if pos is not None else None,
@@ -74,15 +72,15 @@ def main():
                     }
 
                     next_obs, reward, done, info = env.step(action_object)
-                    number_of_steps += 1
                     env.render()
-                    reward = 1.0
-                    reward_this_episode += 1
 
                     obs = next_obs
                     obs = update_obs(obs)
                     spatial_obs = np.expand_dims(obs[0], axis=0)
                     non_spatial_obs = np.expand_dims(obs[1], axis=0)
+
+                    reward = 1.0
+                    legal_actions += 1
 
                 else:
                     non_legal_actions += 1
@@ -91,13 +89,19 @@ def main():
                 # insert the step taken into memory
                 memory.insert(step, torch.from_numpy(spatial_obs).float(), torch.from_numpy(non_spatial_obs).float(),
                               action.data.squeeze(1), value.data.squeeze(1), torch.tensor(reward))
+                print(chosen_action)
+                if done:
+                    env.reset()
+                    break
+
+
 
             next_value = ac_agent(Variable(memory.spatial_obs[-1]), Variable(memory.non_spatial_obs[-1]))[0].data
             memory.compute_returns(next_value, False, gamma)
 
             action_probs, values = ac_agent.evaluate_actions(
                 Variable(memory.spatial_obs[:-1].view(-1, *spatial_obs_space)),
-                Variable(memory.non_spatial_obs[:-1].view(-1, 7)))
+                Variable(memory.non_spatial_obs[:-1].view(-1, 49)))
 
             action_log_probs = F.log_softmax(action_probs)
             # action_log_probs = action_probs.log()
@@ -118,18 +122,16 @@ def main():
 
             memory.non_spatial_obs[0].copy_(memory.non_spatial_obs[-1])
             memory.spatial_obs[0].copy_(memory.spatial_obs[-1])
-            print("game: ", game, "Steps taken: ", number_of_steps, "reward: ", reward_this_episode)
-            print("ACTION: ", chosen_action)
 
-        print("game: ", game, "Steps taken: ", number_of_steps, "reward: ", reward_this_episode)
 
-    print("game: ", game, "Steps taken: ", number_of_steps, "reward: ", reward_this_episode)
+
+        print("Game: ", game, "Legal actions: ", legal_actions, "Non legal actions: ", non_legal_actions)
 
 
 def update_obs(obs):
     """
     Takes the observation returned by the environment and transforms it to an numpy array that contains all of
-    the feature layers.
+    the feature layers and non-spatial info
     """
     feature_layers = np.stack((obs['board']['own players'],
                                obs['board']['occupied'],
@@ -159,18 +161,61 @@ def update_obs(obs):
                                obs['board']['pass']
                                ))
 
-    # 'is own turn', 'own score', 'opponent score', 'half', 'round', 'own rerolls left', 'opponent rerolls left, 'procedure'
-    non_spatial_info = np.stack((obs['state']['is own turn'],
-                                 obs['state']['own score'],
-                                 obs['state']['opp score'],
-                                 obs['state']['half'],
-                                 obs['state']['round'],
-                                 obs['state']['own rerolls left'],
-                                 obs['state']['opp rerolls left']))
+    # Non-spatial info
+    non_spatial_info = np.stack((obs['state']['half'],
+                                obs['state']['round'],
+                                obs['state']['is sweltering heat'],
+                                obs['state']['is very sunny'],
+                                obs['state']['is nice'],
+                                obs['state']['is pouring rain'],
+                                obs['state']['is blizzard'],
+                                obs['state']['is own turn'],
+                                obs['state']['is kicking first half'],
+                                obs['state']['is kicking this drive'],
+                                obs['state']['own reserves'],
+                                obs['state']['own kods'],
+                                obs['state']['own casualites'],
+                                obs['state']['opp reserves'],
+                                obs['state']['opp kods'],
+                                obs['state']['opp casualties'],
+                                obs['state']['own score'],
+                                obs['state']['own starting rerolls'],
+                                obs['state']['own rerolls left'],
+                                obs['state']['own ass coaches'],
+                                obs['state']['own cheerleaders'],
+                                obs['state']['own bribes'],
+                                obs['state']['own babes'],
+                                obs['state']['own apothecary available'],
+                                obs['state']['own reroll available'],
+                                obs['state']['own fame'],
+                                obs['state']['opp score'],
+                                obs['state']['opp turns'],
+                                obs['state']['opp starting rerolls'],
+                                obs['state']['opp rerolls left'],
+                                obs['state']['opp ass coaches'],
+                                obs['state']['opp cheerleaders'],
+                                obs['state']['opp bribes'],
+                                obs['state']['opp babes'],
+                                obs['state']['opp apothecary available'],
+                                obs['state']['opp reroll available'],
+                                obs['state']['opp fame'],
+                                obs['state']['is blitz available'],
+                                obs['state']['is pass available'],
+                                obs['state']['is handoff available'],
+                                obs['state']['is foul available'],
+                                obs['state']['is blitz'],
+                                obs['state']['is quick snap'],
+                                obs['state']['is move action'],
+                                obs['state']['is block action'],
+                                obs['state']['is blitz action'],
+                                obs['state']['is pass action'],
+                                obs['state']['is handoff action'],
+                                obs['state']['is foul action']))
 
     currentObs = (feature_layers, non_spatial_info)
 
     return currentObs
+
 
 if __name__ == "__main__":
     main()
