@@ -37,12 +37,11 @@ class CNNPolicy(FFPolicy):
         self.conv1 = nn.Conv2d(num_inputs, out_channels=52, kernel_size=2)
         self.conv2 = nn.Conv2d(in_channels=52, out_channels=26, kernel_size=2)
 
+        self.linear1 = nn.Linear(49, 98)
+        self.linear2 = nn.Linear(98, 49)
 
-        self.linear1 = nn.Linear(7, 28)
-        self.linear2 = nn.Linear(28, 7)
-
-        self.critic = nn.Linear(26 * 5 * 12 + 7, 1)
-        self.actor = nn.Linear(26 * 5 * 12 + 7, action_space_shape)
+        self.critic = nn.Linear(26 * 5 * 12 + 49, 1)
+        self.actor = nn.Linear(26 * 5 * 12 + 49, action_space_shape)
 
         # num_outputs = 1
         # self.dist = Categorical(26 * 5 * 12 + 7, num_outputs)
@@ -55,6 +54,7 @@ class CNNPolicy(FFPolicy):
         self.conv1.weight.data.mul_(relu_gain)
         self.conv2.weight.data.mul_(relu_gain)
         self.linear1.weight.data.mul_(relu_gain)
+        self.linear2.weight.data.mul_(relu_gain)
 
     def forward(self, spatial_input, non_spatial_input):
         """
@@ -74,7 +74,7 @@ class CNNPolicy(FFPolicy):
 
         # Concatenate the outputs
         concatenated = torch.cat((x.flatten(), y.flatten()), dim=0)
-        concatenated = concatenated.view(-1, 26 * 5 * 12 + 7)
+        concatenated = concatenated.view(-1, 26 * 5 * 12 + 49)
 
         # Return value, policy
         return self.critic(concatenated), self.actor(concatenated)
