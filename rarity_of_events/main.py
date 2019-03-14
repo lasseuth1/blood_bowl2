@@ -17,39 +17,45 @@ def main():
 
     env = gym.make("FFAI-3-v1")
     spatial_obs_space = env.observation_space.spaces['board'].shape
+    # spatial_obs_space = (26, 7, 14)
     # non_spatial_space = (1, 7)
     non_spatial_space = (1, 49)
     action_space = len(env.actions)
-    ac_agent = CNNPolicy(spatial_obs_space[0], action_space)
+
+    # If we want to make a new model
+    # ac_agent = CNNPolicy(spatial_obs_space[0], action_space)
+
+    # If we want to load a saved model
+    ac_agent = torch.load("5000_trained_model.pt")
 
     # Parameters
     num_steps = 20
     rnd = np.random.RandomState(0)
     learning_rate = 0.01
-    epsilon = 1e-5
-    alpha = 0.99
     gamma = 0.99
 
-    optimizer = optim.RMSprop(ac_agent.parameters(), learning_rate, eps=epsilon, alpha=alpha)
+    optimizer = optim.RMSprop(ac_agent.parameters(), learning_rate)
     # optimizer = optim.Adam(ac_agent.parameters(), learning_rate)
-    number_of_games = 10000
+    number_of_games = 1000
 
     # Creating the memory to store the steps taken
     memory = Memory(num_steps, spatial_obs_space, non_spatial_space)
 
     obs = env.reset()
-    obs = update_obs(obs)
-    spatial_obs = np.expand_dims(obs[0], axis=0)
-    non_spatial_obs = np.expand_dims(obs[1], axis=0)
+    spatial_obs, non_spatial_obs = update_obs(obs)
 
     memory.spatial_obs[0].copy_(torch.from_numpy(spatial_obs).float())
     memory.non_spatial_obs[0].copy_(torch.from_numpy(non_spatial_obs).float())
+
+    total_non_legal_actions = 0
+    total_legal_actions = 0
 
     for game in range(number_of_games):
 
         legal_actions = 0
         non_legal_actions = 0
         done = False
+        non_legal_actions_collected = [0] * 38
 
         while not done:
 
@@ -61,7 +67,7 @@ def main():
                 chosen_action = action.data.squeeze(0).numpy()
 
                 if chosen_action in available_actions:
-                    # random_action = rnd.choice(available_actions)
+
                     available_positions = env.available_positions(chosen_action[0])
                     pos = rnd.choice(available_positions) if len(available_positions) > 0 else None
 
@@ -71,33 +77,34 @@ def main():
                         'y': pos.y if pos is not None else None
                     }
 
-                    next_obs, reward, done, info = env.step(action_object)
+                    obs, reward, done, info = env.step(action_object)
                     env.render()
 
-                    obs = next_obs
-                    obs = update_obs(obs)
-                    spatial_obs = np.expand_dims(obs[0], axis=0)
-                    non_spatial_obs = np.expand_dims(obs[1], axis=0)
+                    # Update the observations returned by the environment
+                    spatial_obs, non_spatial_obs = update_obs(obs)
 
                     reward = 1.0
                     legal_actions += 1
+                    total_legal_actions += 1
 
                 else:
                     non_legal_actions += 1
+                    total_non_legal_actions += 1
                     reward = 0
+                    non_legal_actions_collected[chosen_action[0]] += 1
+
+                # random_action = rnd.choice(available_actions) if len(available_actions) > 0 else None
 
                 # insert the step taken into memory
                 memory.insert(step, torch.from_numpy(spatial_obs).float(), torch.from_numpy(non_spatial_obs).float(),
                               action.data.squeeze(1), value.data.squeeze(1), torch.tensor(reward))
-                print(chosen_action)
+
                 if done:
                     env.reset()
                     break
 
-
-
             next_value = ac_agent(Variable(memory.spatial_obs[-1]), Variable(memory.non_spatial_obs[-1]))[0].data
-            memory.compute_returns(next_value, False, gamma)
+            memory.compute_returns(next_value, gamma)
 
             action_probs, values = ac_agent.evaluate_actions(
                 Variable(memory.spatial_obs[:-1].view(-1, *spatial_obs_space)),
@@ -123,9 +130,13 @@ def main():
             memory.non_spatial_obs[0].copy_(memory.non_spatial_obs[-1])
             memory.spatial_obs[0].copy_(memory.spatial_obs[-1])
 
-
-
         print("Game: ", game, "Legal actions: ", legal_actions, "Non legal actions: ", non_legal_actions)
+        average = total_non_legal_actions/total_legal_actions
+        # print("Running average: ", "%.2f" % average)
+        print("Ratio: ", "%.2f" % average)
+
+    print("Total non legal: ", total_non_legal_actions)
+    # torch.save(ac_agent, "10000_trained_model.pt")
 
 
 def update_obs(obs):
@@ -212,9 +223,12 @@ def update_obs(obs):
                                 obs['state']['is handoff action'],
                                 obs['state']['is foul action']))
 
-    currentObs = (feature_layers, non_spatial_info)
+    current_obs = (feature_layers, non_spatial_info)
 
-    return currentObs
+    spatial_obs = np.expand_dims(current_obs[0], axis=0)
+    non_spatial_obs = np.expand_dims(current_obs[1], axis=0)
+
+    return spatial_obs, non_spatial_obs
 
 
 if __name__ == "__main__":
