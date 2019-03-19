@@ -3,14 +3,14 @@ import ffai.ai
 import torch
 import torch.nn as nn
 import numpy as np
-import rarity_of_events
 from torch.autograd import Variable
 from rarity_of_events.model import CNNPolicy
-from rarity_of_events.memory import Memory
 import torch.optim as optim
 import matplotlib.pyplot as plt
 from rarity_of_events.memory import Memory
 import torch.nn.functional as F
+from rarity_of_events.events import get_events, get_bb_vars
+from rarity_of_events.event_buffer import EventBuffer
 
 
 def main():
@@ -23,26 +23,29 @@ def main():
     action_space = len(env.actions)
 
     # If we want to make a new model
-    # ac_agent = CNNPolicy(spatial_obs_space[0], action_space)
+    ac_agent = CNNPolicy(spatial_obs_space[0], action_space)
 
     # If we want to load a saved model
-    ac_agent = torch.load("5000_trained_model.pt")
+    # ac_agent = torch.load("14000_trained_model.pt")
 
     # Parameters
     num_steps = 20
     rnd = np.random.RandomState(0)
-    learning_rate = 0.01
+    learning_rate = 0.001
+    # The discount factor
     gamma = 0.99
 
     optimizer = optim.RMSprop(ac_agent.parameters(), learning_rate)
     # optimizer = optim.Adam(ac_agent.parameters(), learning_rate)
-    number_of_games = 1000
+
+    number_of_games = 20000
 
     # Creating the memory to store the steps taken
     memory = Memory(num_steps, spatial_obs_space, non_spatial_space)
 
     obs = env.reset()
     spatial_obs, non_spatial_obs = update_obs(obs)
+    last_vars = [0] * 6  # 6 is the number of events
 
     memory.spatial_obs[0].copy_(torch.from_numpy(spatial_obs).float())
     memory.non_spatial_obs[0].copy_(torch.from_numpy(non_spatial_obs).float())
@@ -50,8 +53,12 @@ def main():
     total_non_legal_actions = 0
     total_legal_actions = 0
 
+    # Create event-buffer
+    event_buffer = EventBuffer(6, 100)
+
     for game in range(number_of_games):
 
+        episode_rewards = 0
         legal_actions = 0
         non_legal_actions = 0
         done = False
@@ -62,46 +69,74 @@ def main():
             for step in range(num_steps):
 
                 available_actions = env.available_action_types()
-                value, action = ac_agent.act(Variable(memory.spatial_obs[step]), Variable(memory.non_spatial_obs[step]))
-                # chosen_action = action[0]
+                value, action, position = ac_agent.act(Variable(memory.spatial_obs[step]),
+                                                       Variable(memory.non_spatial_obs[step]),
+                                                       available_actions, env)
+
+                # chosen_action = action[1]
                 chosen_action = action.data.squeeze(0).numpy()
 
                 if chosen_action in available_actions:
 
-                    available_positions = env.available_positions(chosen_action[0])
-                    pos = rnd.choice(available_positions) if len(available_positions) > 0 else None
+                    if len(position) == 1:
+                        position = position.data.squeeze(0).numpy()
+                        pos_y = int(position/ 14)
+                        pos_x = int(position % 14)
 
-                    action_object = {
-                        'action-type': chosen_action[0],
-                        'x': pos.x if pos is not None else None,
-                        'y': pos.y if pos is not None else None
-                    }
+                        action_object = {
+                            'action-type': chosen_action,
+                            'x': pos_x,
+                            'y': pos_y,
+                        }
 
+                    else:
+
+                        available_positions = env.available_positions(chosen_action)
+                        pos = rnd.choice(available_positions) if len(available_positions) > 0 else None
+                        action_object = {
+                            'action-type': chosen_action,
+                            'x': pos.x if pos is not None else None,
+                            'y': pos.y if pos is not None else None
+                        }
+
+                    # try:
                     obs, reward, done, info = env.step(action_object)
+                    game_vars = get_bb_vars(obs)
+                    events = get_events(game_vars, last_vars)
+                    # intrinsic_reward = []
                     env.render()
+
+                    # intrinsic_reward.append(event_buffer.intrinsic_reward(events))
+                    intrinsic_reward = np.sum(events)
+                    intrinsic_reward_tensor = torch.from_numpy(np.asarray(intrinsic_reward)).float()
+
+                    # except:
+                    #     done = True
+                    #     env.reset()
+                    #     break
 
                     # Update the observations returned by the environment
                     spatial_obs, non_spatial_obs = update_obs(obs)
 
-                    reward = 1.0
                     legal_actions += 1
-                    total_legal_actions += 1
+                    episode_rewards += intrinsic_reward
+
+                   # total_legal_actions += 1
 
                 else:
                     non_legal_actions += 1
-                    total_non_legal_actions += 1
+                   # total_non_legal_actions += 1
                     reward = 0
-                    non_legal_actions_collected[chosen_action[0]] += 1
-
-                # random_action = rnd.choice(available_actions) if len(available_actions) > 0 else None
+                   # non_legal_actions_collected[chosen_action[0]] += 1
 
                 # insert the step taken into memory
                 memory.insert(step, torch.from_numpy(spatial_obs).float(), torch.from_numpy(non_spatial_obs).float(),
-                              action.data.squeeze(1), value.data.squeeze(1), torch.tensor(reward))
-
+                              action.data, value.data.squeeze(1), intrinsic_reward_tensor)
                 if done:
                     env.reset()
                     break
+
+                last_vars = game_vars
 
             next_value = ac_agent(Variable(memory.spatial_obs[-1]), Variable(memory.non_spatial_obs[-1]))[0].data
             memory.compute_returns(next_value, gamma)
@@ -122,7 +157,7 @@ def main():
             action_loss = -(Variable(advantages.data) * chosen_action_log_probs).mean()
 
             optimizer.zero_grad()
-            total_loss = (value_loss * 0.5 + action_loss - entropy * 0.01)
+            total_loss = (value_loss + action_loss - entropy * 0.0001)
             total_loss.backward()
             nn.utils.clip_grad_norm(ac_agent.parameters(), 0.5)
             optimizer.step()
@@ -130,13 +165,13 @@ def main():
             memory.non_spatial_obs[0].copy_(memory.non_spatial_obs[-1])
             memory.spatial_obs[0].copy_(memory.spatial_obs[-1])
 
-        print("Game: ", game, "Legal actions: ", legal_actions, "Non legal actions: ", non_legal_actions)
-        average = total_non_legal_actions/total_legal_actions
+        print("Game: ", game, "Legal actions: ", legal_actions, "Episode_rewards: ", episode_rewards)
+        #average = total_non_legal_actions/total_legal_actions
         # print("Running average: ", "%.2f" % average)
-        print("Ratio: ", "%.2f" % average)
+        #print("Ratio: ", "%.2f" % average)
 
     print("Total non legal: ", total_non_legal_actions)
-    # torch.save(ac_agent, "10000_trained_model.pt")
+    torch.save(ac_agent, "16000_trained_model.pt")
 
 
 def update_obs(obs):
