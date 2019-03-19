@@ -1,1 +1,1 @@
-# Applying Raruty of Events to Blood Bowl
+# Applying Rarity of Events to Blood Bowl
