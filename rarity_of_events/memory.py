@@ -13,7 +13,8 @@ class Memory(object):
         self.actions = self.actions.long()
 
     def cuda(self):
-        self.observations = self.observations.cuda()
+        self.spatial_obs = self.spatial_obs.cuda()
+        self.non_spatial_obs = self.non_spatial_obs.cuda()
         self.rewards = self.rewards.cuda()
         self.value_predictions = self.value_predictions.cuda()
         self.returns = self.returns.cuda()
