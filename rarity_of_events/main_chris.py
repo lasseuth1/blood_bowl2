@@ -17,8 +17,6 @@ def main():
 
     env = gym.make("FFAI-3-v1")
     spatial_obs_space = env.observation_space.spaces['board'].shape
-    # spatial_obs_space = (26, 7, 14)
-    # non_spatial_space = (1, 7)
     non_spatial_space = (1, 49)
     action_space = len(env.actions)
 
