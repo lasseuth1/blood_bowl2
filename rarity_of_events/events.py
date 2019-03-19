@@ -6,6 +6,8 @@ def get_events(vars, last_vars):
     num_events = 6
     if len(last_vars) == 0:
         last_vars = [0] * num_events  # Used initially
+        last_vars[3] = np.asanyarray([])
+        last_vars[5] = np.zeros((7, 14))
 
     events = np.zeros(num_events)
 

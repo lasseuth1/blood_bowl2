@@ -43,7 +43,6 @@ def main():
 
     obs = env.reset()
     spatial_obs, non_spatial_obs = update_obs(obs)
-    last_vars = [0] * 6  # 6 is the number of events
 
     memory.spatial_obs[0].copy_(torch.from_numpy(spatial_obs).float())
     memory.non_spatial_obs[0].copy_(torch.from_numpy(non_spatial_obs).float())
@@ -61,6 +60,7 @@ def main():
         non_legal_actions = 0
         done = False
         non_legal_actions_collected = [0] * 38
+        last_vars = []
 
         while not done:
 
@@ -78,7 +78,7 @@ def main():
 
                     if len(position) == 1:
                         position = position.data.squeeze(0).numpy()
-                        pos_y = int(position/ 14)
+                        pos_y = int(position / 14)
                         pos_x = int(position % 14)
 
                         action_object = {
@@ -86,9 +86,7 @@ def main():
                             'x': pos_x,
                             'y': pos_y,
                         }
-
                     else:
-
                         available_positions = env.available_positions(chosen_action)
                         pos = rnd.choice(available_positions) if len(available_positions) > 0 else None
                         action_object = {
@@ -97,21 +95,16 @@ def main():
                             'y': pos.y if pos is not None else None
                         }
 
-                    # try:
                     obs, reward, done, info = env.step(action_object)
+                    env.render()
+
                     game_vars = get_bb_vars(obs)
                     events = get_events(game_vars, last_vars)
                     # intrinsic_reward = []
-                    env.render()
 
                     # intrinsic_reward.append(event_buffer.intrinsic_reward(events))
                     intrinsic_reward = np.sum(events)
                     intrinsic_reward_tensor = torch.from_numpy(np.asarray(intrinsic_reward)).float()
-
-                    # except:
-                    #     done = True
-                    #     env.reset()
-                    #     break
 
                     # Update the observations returned by the environment
                     spatial_obs, non_spatial_obs = update_obs(obs)
@@ -119,13 +112,8 @@ def main():
                     legal_actions += 1
                     episode_rewards += intrinsic_reward
 
-                   # total_legal_actions += 1
-
                 else:
                     non_legal_actions += 1
-                   # total_non_legal_actions += 1
-                    reward = 0
-                   # non_legal_actions_collected[chosen_action[0]] += 1
 
                 # insert the step taken into memory
                 memory.insert(step, torch.from_numpy(spatial_obs).float(), torch.from_numpy(non_spatial_obs).float(),
