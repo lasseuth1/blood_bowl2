@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,38 +11,71 @@ class FFPolicy(nn.Module):
     def forward(self, x, y):
         raise NotImplementedError
 
-    def act(self, spatial_inputs, non_spatial_input, avail_actions, env):
+    def act(self, spatial_inputs, non_spatial_input, avail_actions, envs):
         value, policy, position = self(spatial_inputs, non_spatial_input)
+        num_processes = envs.num_envs
 
-        probs_action = F.softmax(policy)
-        probs_action = probs_action[0]
+        probs_action = F.softmax(policy, dim=0)
+        temp_action = probs_action * avail_actions
+        probs_action *= avail_actions
+        summed_actions = torch.sum(probs_action, dim=1)
+        normalized_actions = torch.div(probs_action, summed_actions.view(num_processes, 1))
 
-        mask = torch.ones(len(probs_action), dtype=torch.uint8)
-        for action in avail_actions:
-            mask[action] = 0
-        probs_action [mask] = 0
-        action = probs_action.multinomial(1)
+        try:
+            actions = normalized_actions.multinomial(1)
+        except RuntimeError:
+            actions = avail_actions.multinomial(1)
 
-        probs_position = F.softmax(position)
-        # probs_position = probs_position[0].view(7, 14)
-        probs_position = probs_position[0]
+        avail_positions = envs.positions(actions)
+        probs_position = F.softmax(position, dim=0)
+        temp_position = probs_position * avail_positions
+        probs_position *= avail_positions
+        summed_pos = torch.sum(probs_position, dim=1)
+        normalized_pos = torch.div(probs_position, summed_pos.view(num_processes, 1))
 
-        avail_positions = env.available_positions(action)
-        if len(avail_positions) != 0:
-            mask = torch.ones(7 * 14, dtype=torch.uint8)
-            for pos in avail_positions:
-                new_pos = pos.x + 14 * pos.y
-                mask[new_pos] = 0
-            probs_position[mask] = 0
-            position = probs_position.multinomial(1)
-        else:
-            position = []
+        # Make action objects
+        action_objects = []
+        positions_collected = torch.zeros(num_processes, 1)
+        for i in range(num_processes):
+            action = actions[i]  # get action
+            pos = normalized_pos[i]  # get position tensor
+            try:
+                pos = pos.multinomial(1)
+                pos = pos.item()
+            except RuntimeError:
+                pos = avail_positions[i].multinomial(1)
+                pos = pos.item()
 
-        return value, action, position
+            action_object = {
+                'action-type': action.item(),
+                'x': int(pos % 14) if pos is not 98 else None,
+                'y': int(pos / 14) if pos is not 98 else None,
+            }
 
-    def evaluate_actions(self, spatial_inputs, non_spatial_input):
-        value, x, _ = self(spatial_inputs, non_spatial_input)
-        return F.softmax(x), value
+            positions_collected[i] = pos
+
+            action_objects.append(action_object)
+
+        return value, actions, action_objects, positions_collected
+        # return value, actions, position
+
+    def evaluate_actions(self, spatial_inputs, non_spatial_input, actions, positions):
+        """
+        Calls forward() function
+        """
+        value, x, pos = self(spatial_inputs, non_spatial_input)
+
+        log_probs = F.log_softmax(x)
+        probs = F.softmax(x)
+        action_log_probs = log_probs.gather(1, actions)
+
+        pos_log_probs = F.log_softmax(pos)
+        pos_probs = F.softmax(pos)
+        position_log_probs = pos_log_probs.gather(1, positions)
+
+        dist_entropy = -(log_probs * probs).sum(-1).mean()
+
+        return action_log_probs, value, position_log_probs, dist_entropy
 
 
 class CNNPolicy(FFPolicy):
@@ -60,7 +94,7 @@ class CNNPolicy(FFPolicy):
         self.critic = nn.Linear(26 * 5 * 12 + 24, 1)
         self.actor = nn.Linear(26 * 5 * 12 + 24, action_space_shape)
         # chose a position among the 7 * 14 squares on the board
-        self.position = nn.Linear(26 * 5 * 12 + 24, 7 * 14)
+        self.position = nn.Linear(26 * 5 * 12 + 24, 7 * 14 + 1)
 
         self.train()
         self.reset_parameters()
@@ -100,4 +134,3 @@ class CNNPolicy(FFPolicy):
         x, y = self(spatial_input, non_spatial_input)
         action_probs = F.softmax(y)
         return action_probs
-
