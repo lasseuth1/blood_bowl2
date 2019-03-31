@@ -16,6 +16,7 @@ import uuid
 import tkinter as tk
 import math
 from copy import deepcopy
+import numpy as np
 
 
 class FFAIEnv(gym.Env):
@@ -203,9 +204,9 @@ class FFAIEnv(gym.Env):
         arena = get_arena(self.config.arena)
 
         self.observation_space = spaces.Dict({
-            'board': spaces.Box(low=0, high=1, shape=(len(self.layers), arena.height, arena.width)),
-            'state': spaces.Box(low=0, high=1, shape=(50,)),
-            'procedure':  spaces.Box(low=0, high=1, shape=(len(FFAIEnv.procedures),)),
+            'board': spaces.Box(low=0, high=1, shape=(len(self.layers), arena.height, arena.width), dtype=np.float32),
+            'state': spaces.Box(low=0, high=1, shape=(50,), dtype=np.float32),
+            'procedure':  spaces.Box(low=0, high=1, shape=(len(FFAIEnv.procedures),), dtype=np.float32),
         })
 
         self.actions = FFAIEnv.actions
@@ -452,9 +453,9 @@ class FFAIEnv(gym.Env):
                 self.rows = math.ceil(math.sqrt(len(self.layers)))
                 self.fl_width = (self.game.arena.width+1) * self.cols * FFAIEnv.square_size_fl + FFAIEnv.square_size_fl
                 self.fl_height = ((self.game.arena.height+1) * FFAIEnv.square_size_fl + FFAIEnv.layer_text_height) * self.rows + FFAIEnv.square_size_fl
-                self.cv = tk.Canvas(width=max(self.game_width, self.fl_width), height=self.fl_height + self.game_height)
+                self.cv = tk.Canvas(width=max(self.game_width, self.fl_width), height=self.fl_height + self.game_height, master=self.root)
             else:
-                self.cv = tk.Canvas(width=self.game_width, height=self.game_height)
+                self.cv = tk.Canvas(width=self.game_width, height=self.game_height, master=self.root)
 
         self.cv.pack(side='top', fill='both', expand='yes')
         self.cv.delete("all")
