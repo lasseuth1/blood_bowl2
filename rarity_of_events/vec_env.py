@@ -21,6 +21,8 @@ def worker(remote, parent_remote, env):
     episode_cnt = 0.0
     total_episode_cnt = 0
     step_cnt = 0
+    touchdowns = 0
+    opp_casualties = 0
     vars = []
     episode_events = np.zeros(5)  # Number of events 5
 
@@ -95,6 +97,17 @@ def worker(remote, parent_remote, env):
             events[4] = 1
         return events
 
+    def check_team_has_ball(obs):
+        ball_layer = obs['board']['balls']
+        own_player_layer = obs['board']['own players']
+
+        item_index = np.where(ball_layer == 1)
+        if own_player_layer[item_index] == 1:
+            team_has_ball = True
+        else:
+            team_has_ball = False
+        return team_has_ball
+
     while True:
         command, data = remote.recv()
 
@@ -103,18 +116,47 @@ def worker(remote, parent_remote, env):
             if len(vars) == 0:
                 vars = get_bb_vars(env.last_obs)
             last_vars = vars
+            events = []
             try:
                 obs, reward, done, info = env.step(action)
-            except:
+            except RuntimeError:
                 obs = env.reset()
+                touchdowns = 0
+                opp_casualties = 0
                 reward = 0
                 done = True
                 info = None
+                remote.send((obs, reward, done, info, events))
+
+            # INTERCEPTION
+            if action['action-type'] == 20:
+                if check_team_has_ball(obs):
+                    reward += 2
+                    print("Interception!")
+            # PASS
+            if action['action-type'] == 24:
+                if check_team_has_ball(obs):
+                    reward += 1
+                    # print("Pass completed!")
+            # TOUCHDOWN
+            if info['touchdowns'] > touchdowns:
+                reward += 3
+                print("TOUCHDOWN!")
+            touchdowns = info['touchdowns']  # always update number of touchdowns to compare next step
+            # CASUALTIES
+            if action['action-type'] == 23:
+                if info['opp_cas_inflicted'] > opp_casualties:
+                    reward += 2
+                    # print("Casualty inflicted!")
+            opp_casualties = info['opp_cas_inflicted']  # same as with touchdowns
+
             vars = get_bb_vars(obs)
             events = get_events(vars, last_vars)
             step_cnt += 1
             if done:
                 obs = env.reset()
+                touchdowns = 0
+                opp_casualties = 0
                 vars = get_bb_vars(obs)
 
             remote.send((obs, reward, done, info, events))
@@ -173,6 +215,7 @@ class VecEnv():
         for remote, action in zip(self.remotes, actions):
             remote.send(('step', action))
         results = [remote.recv() for remote in self.remotes]
+
         obs, rews, dones, infos, events = zip(*results)
         if cumul_rewards is None:
             cumul_rewards = np.stack(rews)
