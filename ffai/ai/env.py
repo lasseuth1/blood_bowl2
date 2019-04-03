@@ -16,7 +16,6 @@ import uuid
 import tkinter as tk
 import math
 from copy import deepcopy
-import numpy as np
 
 
 class FFAIEnv(gym.Env):
@@ -155,7 +154,7 @@ class FFAIEnv(gym.Env):
     ]
 
     def __init__(self, config, home_team, away_team, opp_actor=None):
-        self.__version__ = "0.0.1"
+        self.__version__ = "0.0.2"
         self.config = config
         self.config.competition_mode = False
         self.config.fast_mode = True
@@ -167,6 +166,7 @@ class FFAIEnv(gym.Env):
         self.away_team = away_team
         self.actor = Agent("Gym Learner", human=True)
         self.opp_actor = opp_actor if opp_actor is not None else RandomBot("Random")
+        self._seed = None
         self.seed()
         self.root = None
         self.cv = None
@@ -179,6 +179,7 @@ class FFAIEnv(gym.Env):
             OwnTackleZoneLayer(),
             OppTackleZoneLayer(),
             UpLayer(),
+            StunnedLayer(),
             UsedLayer(),
             AvailablePlayerLayer(),
             AvailablePositionLayer(),
@@ -198,15 +199,16 @@ class FFAIEnv(gym.Env):
             SkillLayer(Skill.BLOCK),
             SkillLayer(Skill.DODGE),
             SkillLayer(Skill.SURE_HANDS),
+            SkillLayer(Skill.CATCH),
             SkillLayer(Skill.PASS)
         ]
 
         arena = get_arena(self.config.arena)
 
         self.observation_space = spaces.Dict({
-            'board': spaces.Box(low=0, high=1, shape=(len(self.layers), arena.height, arena.width), dtype=np.float32),
-            'state': spaces.Box(low=0, high=1, shape=(50,), dtype=np.float32),
-            'procedure':  spaces.Box(low=0, high=1, shape=(len(FFAIEnv.procedures),), dtype=np.float32),
+            'board': spaces.Box(low=0, high=1, shape=(len(self.layers), arena.height, arena.width)),
+            'state': spaces.Box(low=0, high=1, shape=(50,)),
+            'procedure':  spaces.Box(low=0, high=1, shape=(len(FFAIEnv.procedures),)),
         })
 
         self.actions = FFAIEnv.actions
@@ -226,6 +228,7 @@ class FFAIEnv(gym.Env):
         player = None
         if action_type in self.player_action_types:
             if p is None:
+                self.render()
                 raise Exception(f"{action_type.name} requires a position. None was given.")
             player = self.game.get_player_at(p)
             if player is None:
@@ -260,11 +263,14 @@ class FFAIEnv(gym.Env):
 
     def seed(self, seed=None):
         if seed is None:
-            seed = np.random.randint(0, 2**31)
-        self.rnd = np.random.RandomState(seed)
+            self._seed = np.random.randint(0, 2**31)
+        self.rnd = np.random.RandomState(self._seed)
         if isinstance(self.opp_actor, RandomBot):
             self.opp_actor.rnd = self.rnd
-        return seed
+        return self._seed
+
+    def get_seed(self):
+        return self._seed
 
     def get_game(self):
         return self.game
@@ -592,4 +598,3 @@ class FFAIEnv(gym.Env):
         self.game = None
         self.root = None
         self.cv = None
-

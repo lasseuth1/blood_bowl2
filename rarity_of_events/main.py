@@ -27,8 +27,8 @@ def main():
     action_space = len(es[0].actions)
 
     # MODELS #
-    # ac_agent = CNNPolicy(spatial_obs_space[0], action_space)  # New model
-    ac_agent = torch.load("models/" + args.model_to_load)         # Load model
+    ac_agent = CNNPolicy(spatial_obs_space[0], action_space)  # New model
+    # ac_agent = torch.load("models/" + args.model_to_load)         # Load model
 
     optimizer = optim.RMSprop(ac_agent.parameters(), args.learning_rate)
     # optimizer = optim.Adam(ac_agent.parameters(), learning_rate)
@@ -73,11 +73,6 @@ def main():
                                                          envs)
 
             obs, reward, done, info, events = envs.step(action_objects)
-            if reward.sum() > last_rewards:
-                number_of_touchdowns += 1
-                last_rewards = reward.sum()
-            else:
-                last_rewards = reward.sum()
 
             intrinsic_reward = []
 
@@ -108,6 +103,8 @@ def main():
             event_episode_rewards.append(event_rewards)
 
             # If done then clean the history of observations.
+            if torch.sum(reward) > 0:
+                print()
             masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
             final_rewards *= masks
             final_intrinsic_rewards *= masks
@@ -229,7 +226,9 @@ def update_obs(observations):
                                    obs['board']['block'],
                                    obs['board']['dodge'],
                                    obs['board']['sure hands'],
-                                   obs['board']['pass']
+                                   obs['board']['pass'],
+                                   obs['board']['catch'],
+                                   obs['board']['stunned players']
                                    ))
 
         # Non-spatial info

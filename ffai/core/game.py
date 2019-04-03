@@ -85,6 +85,10 @@ class Game:
                 return out
         return []
 
+    def set_seed(self, seed):
+        self.seed = seed
+        self.rnd = np.random.RandomState(self.seed)
+
     def init(self):
         """
         Initialized the Game. The START_GAME action must still be called after this.
@@ -407,7 +411,7 @@ class Game:
         """
         Adds or removes a number of turns from the current half. This method will raise an assertion error if the turn
         counter goes to a negative number.
-        :param turns: The number of turns to add (if positive) or remove (if negative). 
+        :param turns: The number of turns to add (if positive) or remove (if negative).
         """
         for team in self.state.teams:
             team.state.turn += turns
@@ -415,14 +419,14 @@ class Game:
 
     def get_player(self, player_id):
         """
-        :param player_id: 
+        :param player_id:
         :return: Returns the player with player_id
         """
         return self.state.player_by_id[player_id]
 
     def get_player_at(self, pos):
         """
-        :param pos: 
+        :param pos:
         :return: Returns the player at pos else None.
         """
         return self.state.pitch.board[pos.y][pos.x]
@@ -479,14 +483,14 @@ class Game:
 
     def get_opp_team(self, team):
         """
-        :param team: 
+        :param team:
         :return: The opponent team of team.
         """
         return self.state.home_team if self.state.away_team == team else self.state.away_team
 
     def get_reserves(self, team):
         """
-        :param team: 
+        :param team:
         :return: The reserves in the dugout of this team.
         """
         return self.state.get_dugout(team).reserves
@@ -827,6 +831,7 @@ class Game:
         :param min_players: The minimum number of players in the area.
         :return: True if team is setup legally in the specified tile area.
         """
+        min_players_checked = min(min_players, len([player for player in team.players if player.state.up]))
         cnt = 0
         for y in range(len(self.state.pitch.board)):
             for x in range(len(self.state.pitch.board[y])):
@@ -836,7 +841,7 @@ class Game:
                     piece = self.state.pitch.board[y][x]
                     if isinstance(piece, Player) and piece.team == team:
                         cnt += 1
-        if cnt > max_players or cnt < min_players:
+        if cnt > max_players or cnt < min_players_checked:
             return False
         return True
 
@@ -865,10 +870,8 @@ class Game:
         :return: The agent with most touchdowns, otherwise None.
         """
         if self.state.home_team.state.score > self.state.away_team.state.score:
-            # return self.state.home_agent
             return self.home_agent
         elif self.state.home_team.state.score < self.state.away_team.state.score:
-            # return self.state.away_agent
             return self.away_agent
         return None
 

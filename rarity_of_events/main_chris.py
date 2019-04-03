@@ -28,8 +28,8 @@ def main():
     action_space = len(es[0].actions)
 
     # MODELS #
-    ac_agent = CNNPolicy(spatial_obs_space[0], action_space)  # New model
-    # ac_agent = torch.load("models/" + args.model_to_load)         # Load model
+    # ac_agent = CNNPolicy(spatial_obs_space[0], action_space)  # New model
+    ac_agent = torch.load("models/" + args.model_to_load)         # Load model
 
     optimizer = optim.RMSprop(ac_agent.parameters(), args.learning_rate)
     # optimizer = optim.Adam(ac_agent.parameters(), learning_rate)
@@ -110,6 +110,7 @@ def main():
 
             # If done then clean the history of observations.
             masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
+
             final_rewards *= masks
             final_intrinsic_rewards *= masks
             final_events *= masks
@@ -178,11 +179,11 @@ def main():
         final_rewards_mean = final_rewards.mean()
 
         #if (update + 1) % log_interval == 0:
-        if dones % 4 == 0 and log is False:
+        if dones % 8 == 0 and log is False:
             log_file_name = "logs/" + args.log_filename
             total_num_steps = (update + 1) * args.num_processes * args.num_steps
-            # update = update + args.updates_when_stop
-            # total_num_steps = args.timesteps_when_stop + total_num_steps
+            update = update + args.updates_when_stop
+            total_num_steps = args.timesteps_when_stop + total_num_steps
             log = "Updates {}, num timesteps {}, mean reward {:.5f}" \
                 .format(update, total_num_steps, final_rewards_mean)
             log_to_file = "{}, {}, {:.5f}\n" \
@@ -193,7 +194,7 @@ def main():
                 myfile.write(log_to_file)
 
             log = True
-            torch.save(ac_agent, "models/" + args.model_to_save)
+            torch.save(ac_agent, "models/" + args.model_name)
 
 
 def update_obs(observations):

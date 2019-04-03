@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 
 
 def worker(remote, parent_remote, env):
+    global player_id
     parent_remote.close()
 
     total_reward = 0.0
@@ -119,7 +120,7 @@ def worker(remote, parent_remote, env):
             events = []
             try:
                 obs, reward, done, info = env.step(action)
-            except RuntimeError:
+            except:
                 obs = env.reset()
                 touchdowns = 0
                 opp_casualties = 0
@@ -130,24 +131,39 @@ def worker(remote, parent_remote, env):
 
             # INTERCEPTION
             if action['action-type'] == 20:
-                if check_team_has_ball(obs):
-                    reward += 2
-                    print("Interception!")
+                outcomes = env.game.state.reports[-5:] if len(env.game.state.reports) >= 5 else env.game.state.reports
+                for outcome in reversed(outcomes):
+                    if outcome.outcome_type.value == 46:
+                        reward += 2
+                        print("Interception!")
+
             # PASS
             if action['action-type'] == 24:
-                if check_team_has_ball(obs):
-                    reward += 1
-                    # print("Pass completed!")
+                outcomes = env.game.state.reports[-5:] if len(env.game.state.reports) >= 5 else env.game.state.reports
+                for outcome in reversed(outcomes):
+                    if outcome.outcome_type.value == 108:
+                        print("pass catched")
+                        reward += 1
+                        break
             # TOUCHDOWN
             if info['touchdowns'] > touchdowns:
                 reward += 3
                 print("TOUCHDOWN!")
             touchdowns = info['touchdowns']  # always update number of touchdowns to compare next step
+
             # CASUALTIES
-            if action['action-type'] == 23:
-                if info['opp_cas_inflicted'] > opp_casualties:
-                    reward += 2
-                    # print("Casualty inflicted!")
+            if info['opp_cas_inflicted'] > opp_casualties:
+                outcomes = env.game.state.reports[-20:] if len(env.game.state.reports) >= 5 else env.game.state.reports
+                player_id = None
+                for outcome in reversed(outcomes):
+                    if outcome.outcome_type.value == 73:  # If casualty  (If val in [73, 39, 40, 42, 43, 44, 79]:  # CASUALTY ENUM NUMBER)
+                        player_id = outcome.player.player_id
+                    if outcome.outcome_type.value == 119:
+                        if player_id == outcome.player.player_id:
+                            reward += 2
+                            print("Casualty inflicted by block!")
+                            break
+
             opp_casualties = info['opp_cas_inflicted']  # same as with touchdowns
 
             vars = get_bb_vars(obs)

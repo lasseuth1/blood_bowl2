@@ -12,11 +12,14 @@ num_processes = 8
 num_events = 5
 num_steps = 10
 
+# Render
+render = False
+
 # For logging and saving
 log_interval = 50
-model_name = "ac_model_1_noevents.pt"
-model_to_load = "ac_model_1_noevents.pt"
-log_filename = "testing_touchdowns.log"
+model_name = "debugging.pt"
+model_to_load = "ac_model_2_spp.pt"
+log_filename = "debugging.log"
 
 # Learning rate and discount factor
 learning_rate = 0.001
@@ -27,5 +30,5 @@ rarity_of_events = False
 eb_capacity = 100
 
 # Used when training is resumed after stop
-updates_when_stop = 5019
-timesteps_when_stop = 401600
+updates_when_stop = 2567
+timesteps_when_stop = 205520

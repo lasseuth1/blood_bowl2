@@ -10,7 +10,7 @@ class EventBuffer:
         self.events = []
         self.event_clip = event_clip
 
-    def record_events(self, events, frame):
+    def record_events(self, events):
         if len(self.events) < self.capacity:
             self.events.append(events)
         else:
