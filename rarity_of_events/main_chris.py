@@ -55,11 +55,11 @@ def main():
     event_buffer = EventBuffer(args.num_events, capacity=args.eb_capacity)
 
     event_episode_rewards = []
+    total_episodes = 13314
 
     steps = 0
-    dones = 0
-    log = True
-    last_rewards = 0
+    # dones = 0
+    # log = True
 
     renderer = Renderer()
 
@@ -110,7 +110,6 @@ def main():
 
             # If done then clean the history of observations.
             masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
-
             final_rewards *= masks
             final_intrinsic_rewards *= masks
             final_events *= masks
@@ -121,8 +120,8 @@ def main():
             for i in range(args.num_processes):
                 if done[i]:
                     event_buffer.record_events(np.copy(final_events[i].numpy()))
-                    dones += 1
-                    log = False
+                    # dones += 1
+                    # log = False
 
             episode_rewards *= masks
             episode_intrinsic_rewards *= masks
@@ -178,23 +177,30 @@ def main():
         final_intrinsic_rewards_mean = final_intrinsic_rewards.mean()
         final_rewards_mean = final_rewards.mean()
 
-        #if (update + 1) % log_interval == 0:
-        if dones % 8 == 0 and log is False:
+        if (update + 1) % args.log_interval == 0:
+        # if dones % 8 == 0 and log is False:
             log_file_name = "logs/" + args.log_filename
-            total_num_steps = (update + 1) * args.num_processes * args.num_steps
-            update = update + args.updates_when_stop
-            total_num_steps = args.timesteps_when_stop + total_num_steps
-            log = "Updates {}, num timesteps {}, mean reward {:.5f}" \
-                .format(update, total_num_steps, final_rewards_mean)
-            log_to_file = "{}, {}, {:.5f}\n" \
-                .format(update, total_num_steps, final_rewards_mean)
+            # total_num_steps = (update + 1) * args.num_processes * args.num_steps
+            # update = update + args.updates_when_stop
+            # total_num_steps = args.timesteps_when_stop + total_num_steps
+            episodes, rewards, touchdowns, interceptions, passes, casualties = envs.log()
+            episodes_this_update = episodes.sum()
+            total_episodes += episodes_this_update
+            rewards_this_update = rewards.sum()
+            log = "Updates {}, Total Episodes {}, Episodes since update {}, Total reward since update {:.1f}, " \
+                  "Mean reward {:.4f}" \
+                .format(update + 1, total_episodes, episodes_this_update, rewards_this_update,
+                        rewards_this_update/episodes_this_update)
+            log_to_file = "{}, {}, {}, {:.1f}, {:.4f}\n" \
+                .format(update, total_episodes, episodes_this_update, rewards_this_update,
+                        rewards_this_update/episodes_this_update)
             print(log)
 
             with open(log_file_name, "a") as myfile:
                 myfile.write(log_to_file)
 
-            log = True
-            torch.save(ac_agent, "models/" + args.model_name)
+            #log = True
+            torch.save(ac_agent, "models/" + args.model_to_save)
 
 
 def update_obs(observations):
