@@ -20,10 +20,21 @@ def worker(remote, parent_remote, env):
     total_reward = 0.0
     episode_reward = 0.0
     episode_cnt = 0.0
-    total_episode_cnt = 0
     step_cnt = 0
-    touchdowns = 0
-    opp_casualties = 0
+
+    episode_touchdown_cnt = 0
+    episode_interception_cnt = 0
+    episode_pass_cnt = 0
+    episode_casualty_cnt = 0
+
+    total_touchdown_cnt = 0
+    total_interception_cnt = 0
+    total_pass_cnt = 0
+    total_casualty_cnt = 0
+
+
+    last_touchdowns = 0
+    last_opp_casualties = 0
     vars = []
     episode_events = np.zeros(5)  # Number of events 5
 
@@ -109,6 +120,10 @@ def worker(remote, parent_remote, env):
             team_has_ball = False
         return team_has_ball
 
+    def get_stats():
+        return episode_cnt, total_reward, total_touchdown_cnt, total_interception_cnt, total_pass_cnt, \
+               total_casualty_cnt
+
     while True:
         command, data = remote.recv()
 
@@ -122,8 +137,8 @@ def worker(remote, parent_remote, env):
                 obs, reward, done, info = env.step(action)
             except:
                 obs = env.reset()
-                touchdowns = 0
-                opp_casualties = 0
+                last_touchdowns = 0
+                last_opp_casualties = 0
                 reward = 0
                 done = True
                 info = None
@@ -135,24 +150,28 @@ def worker(remote, parent_remote, env):
                 for outcome in reversed(outcomes):
                     if outcome.outcome_type.value == 46:
                         reward += 2
-                        print("Interception!")
+                        # print("Interception!")
+                        episode_interception_cnt += 1
 
             # PASS
             if action['action-type'] == 24:
                 outcomes = env.game.state.reports[-5:] if len(env.game.state.reports) >= 5 else env.game.state.reports
                 for outcome in reversed(outcomes):
                     if outcome.outcome_type.value == 108:
-                        print("pass catched")
+                        # print("pass catched")
                         reward += 1
+                        episode_pass_cnt += 1
                         break
+
             # TOUCHDOWN
-            if info['touchdowns'] > touchdowns:
+            if info['touchdowns'] is not None and info['touchdowns'] > last_touchdowns:
                 reward += 3
                 print("TOUCHDOWN!")
-            touchdowns = info['touchdowns']  # always update number of touchdowns to compare next step
+                episode_touchdown_cnt += 1
+            last_touchdowns = info['touchdowns'] if info['touchdowns'] is not None else 0  # always update number of touchdowns to compare next step
 
             # CASUALTIES
-            if info['opp_cas_inflicted'] > opp_casualties:
+            if info['opp_cas_inflicted'] is not None and info['opp_cas_inflicted'] > last_opp_casualties:
                 outcomes = env.game.state.reports[-20:] if len(env.game.state.reports) >= 5 else env.game.state.reports
                 player_id = None
                 for outcome in reversed(outcomes):
@@ -161,18 +180,34 @@ def worker(remote, parent_remote, env):
                     if outcome.outcome_type.value == 119:
                         if player_id == outcome.player.player_id:
                             reward += 2
-                            print("Casualty inflicted by block!")
+                            # print("Casualty inflicted by block!")
+                            episode_casualty_cnt += 1
                             break
-
-            opp_casualties = info['opp_cas_inflicted']  # same as with touchdowns
+            last_opp_casualties = info['opp_cas_inflicted'] if info['opp_cas_inflicted'] is not None else 0  # same as with touchdowns
 
             vars = get_bb_vars(obs)
             events = get_events(vars, last_vars)
             step_cnt += 1
+            episode_reward += reward
+
             if done:
                 obs = env.reset()
-                touchdowns = 0
-                opp_casualties = 0
+                last_touchdowns = 0
+                last_opp_casualties = 0
+
+                total_reward += episode_reward
+                total_touchdown_cnt += episode_touchdown_cnt
+                total_interception_cnt += episode_interception_cnt
+                total_pass_cnt += episode_pass_cnt
+                total_casualty_cnt += episode_casualty_cnt
+
+                episode_touchdown_cnt = 0
+                episode_interception_cnt = 0
+                episode_pass_cnt = 0
+                episode_casualty_cnt = 0
+                episode_reward = 0
+                episode_cnt += 1
+
                 vars = get_bb_vars(obs)
 
             remote.send((obs, reward, done, info, events))
@@ -203,6 +238,21 @@ def worker(remote, parent_remote, env):
 
         elif command == 'render':
             env.render()
+
+        elif command == "log":
+            epi_cnt, tot_reward, tot_touchdown_cnt, tot_interception_cnt, tot_pass_cnt, \
+                tot_casualty_cnt = get_stats()
+
+            episode_cnt = 0
+            total_reward = 0
+            total_touchdown_cnt = 0
+            total_interception_cnt = 0
+            total_pass_cnt = 0
+            total_casualty_cnt = 0
+
+            remote.send((epi_cnt, tot_reward, tot_touchdown_cnt, tot_interception_cnt, tot_pass_cnt,
+                        tot_casualty_cnt))
+
 
 
 class VecEnv():
@@ -261,6 +311,13 @@ class VecEnv():
         for remote in self.remotes:
             remote.send(('reset', None))
         return np.stack([remote.recv() for remote in self.remotes])
+
+    def log(self):
+        for remote in self.remotes:
+            remote.send(('log', None))
+        results = [remote.recv() for remote in self.remotes]
+        episodes, rewards, touchdowns, interceptions, passes, casualties = zip(*results)
+        return np.stack(episodes), np.stack(rewards), np.stack(touchdowns), np.stack(interceptions), np.stack(passes), np.stack(casualties)
 
     def render(self):
         for remote in self.remotes:
