@@ -142,6 +142,7 @@ def worker(remote, parent_remote, env):
                 reward = 0
                 done = True
                 info = None
+                events = [0]*5
                 remote.send((obs, reward, done, info, events))
 
             # INTERCEPTION
@@ -150,7 +151,7 @@ def worker(remote, parent_remote, env):
                 for outcome in reversed(outcomes):
                     if outcome.outcome_type.value == 46:
                         reward += 2
-                        # print("Interception!")
+                        print("Interception!")
                         episode_interception_cnt += 1
 
             # PASS
@@ -158,32 +159,33 @@ def worker(remote, parent_remote, env):
                 outcomes = env.game.state.reports[-5:] if len(env.game.state.reports) >= 5 else env.game.state.reports
                 for outcome in reversed(outcomes):
                     if outcome.outcome_type.value == 108:
-                        # print("pass catched")
+                        print("pass catched")
                         reward += 1
                         episode_pass_cnt += 1
                         break
 
             # TOUCHDOWN
-            if info['touchdowns'] is not None and info['touchdowns'] > last_touchdowns:
-                reward += 3
-                print("TOUCHDOWN!")
-                episode_touchdown_cnt += 1
-            last_touchdowns = info['touchdowns'] if info['touchdowns'] is not None else 0  # always update number of touchdowns to compare next step
+            if info is not None:
+                if info['touchdowns'] > last_touchdowns:
+                    reward += 3
+                    print("TOUCHDOWN!")
+                    episode_touchdown_cnt += 1
+                last_touchdowns = info['touchdowns'] if info['touchdowns'] is not None else 0  # always update number of touchdowns to compare next step
 
-            # CASUALTIES
-            if info['opp_cas_inflicted'] is not None and info['opp_cas_inflicted'] > last_opp_casualties:
-                outcomes = env.game.state.reports[-20:] if len(env.game.state.reports) >= 5 else env.game.state.reports
-                player_id = None
-                for outcome in reversed(outcomes):
-                    if outcome.outcome_type.value == 73:  # If casualty  (If val in [73, 39, 40, 42, 43, 44, 79]:  # CASUALTY ENUM NUMBER)
-                        player_id = outcome.player.player_id
-                    if outcome.outcome_type.value == 119:
-                        if player_id == outcome.player.player_id:
-                            reward += 2
-                            # print("Casualty inflicted by block!")
-                            episode_casualty_cnt += 1
-                            break
-            last_opp_casualties = info['opp_cas_inflicted'] if info['opp_cas_inflicted'] is not None else 0  # same as with touchdowns
+                # CASUALTIES
+                if info['opp_cas_inflicted'] > last_opp_casualties:
+                    outcomes = env.game.state.reports[-20:] if len(env.game.state.reports) >= 5 else env.game.state.reports
+                    player_id = None
+                    for outcome in reversed(outcomes):
+                        if outcome.outcome_type.value == 73:  # If casualty  (If val in [73, 39, 40, 42, 43, 44, 79]:  # CASUALTY ENUM NUMBER)
+                            player_id = outcome.player.player_id
+                        if outcome.outcome_type.value == 119:
+                            if player_id == outcome.player.player_id:
+                                reward += 2
+                                print("Casualty inflicted by block!")
+                                episode_casualty_cnt += 1
+                                break
+                last_opp_casualties = info['opp_cas_inflicted'] if info['opp_cas_inflicted'] is not None else 0  # same as with touchdowns
 
             vars = get_bb_vars(obs)
             events = get_events(vars, last_vars)
@@ -252,7 +254,6 @@ def worker(remote, parent_remote, env):
 
             remote.send((epi_cnt, tot_reward, tot_touchdown_cnt, tot_interception_cnt, tot_pass_cnt,
                         tot_casualty_cnt))
-
 
 
 class VecEnv():

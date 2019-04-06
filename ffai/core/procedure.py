@@ -903,11 +903,23 @@ class Touchback(Procedure):
         if self.game.config.time_limits is not None:
             self.game.state.termination_opp = time.time() + self.game.config.time_limits.opp_choice
 
+        self.players_on_pitch_standing = self.game.get_players_on_pitch(self.game.state.receiving_this_drive, up=True)
+
     def step(self, action):
-        self.ball.move_to(action.player.position)
-        self.ball.is_carried = True
+
+        player = None
+        if len(self.players_on_pitch_standing) == 0:
+            position = self.game.rnd.choice(self.game.get_team_side(self.game.receiving_this_drive()))
+            self.ball.is_carried = False
+        else:
+            position = action.player.position
+            self.ball.is_carried = True
+            player = action.player
+
+        self.ball.move_to(position)
         self.ball.on_ground = True
-        self.game.report(Outcome(OutcomeType.TOUCHBACK_BALL_PLACED, player=action.player, pos=action.player.position))
+        self.game.report(Outcome(OutcomeType.TOUCHBACK_BALL_PLACED, player=player, pos=position))
+
         return True
 
     def available_actions(self):
