@@ -11,118 +11,187 @@ from ffai.core.load import *
 from ffai.ai.bots import RandomBot
 from ffai.ai.layers import *
 import matplotlib.pyplot as plt
+import rarity_of_events.arguments as args
+import rarity_of_events.utils as utils
 
 
 def worker(remote, parent_remote, env):
     global player_id
     parent_remote.close()
 
-    total_reward = 0.0
-    episode_reward = 0.0
     episode_cnt = 0.0
     step_cnt = 0
+    round_count = 0
 
     episode_touchdown_cnt = 0
-    episode_interception_cnt = 0
     episode_pass_cnt = 0
-    episode_casualty_cnt = 0
+    # episode_casualty_KO_cnt = 0
+    # episode_knockdown_count = 0
+    # episode_get_ball_count = 0
+    # episode_caused_turnover = 0
+    # episode_failing_dodge = 0
+    # episode_push_crowd = 0
 
+
+    episode_step_count = 0
+
+    total_win_cnt = 0
     total_touchdown_cnt = 0
-    total_interception_cnt = 0
     total_pass_cnt = 0
-    total_casualty_cnt = 0
+    # total_casualty_KO_cnt = 0
+    # total_knockeddown_cnt = 0
+    # total_get_ball_count = 0
+    # total_caused_turnover = 0
+    # total_failing_dodge = 0
+    # total_push_crowd = 0
 
-
-    last_touchdowns = 0
-    last_opp_casualties = 0
     vars = []
-    episode_events = np.zeros(5)  # Number of events 5
+    last_turn_vars = []
+    round_count = 0
+    half_count = 0
+    first_step_round = True
+    start_half = True
+    info = None
 
-    def get_bb_vars(obs):
-        ball_layer = obs['board']['balls']
-        own_player_layer = obs['board']['own players']
+    def get_variables(obs):
 
-        item_index = np.where(ball_layer == 1)
-        team_has_ball = own_player_layer[item_index]  # Gets index value of the index where the ball is
+        opp_endzone_x = 1
+        variables = [info['touchdowns'] if info is not None else 0,  # 0. own score
+                     info['opp_touchdowns'] if info is not None else 0,  # 1. Opponent score
+                     check_team_has_ball(obs),  # 2. Team has ball
+                     env.game.get_ball_position(),  # 3. Ball position
+                     opp_endzone_x,  # 4. X-coordinate for opponent endzone
+                     len(env.game.state.reports) if env.game.state.reports is not None else 0, # 5. report size
+                     check_opponent_has_ball(obs)  # 6. checks if the opponent has ball
+                     ]
 
-        vars = [obs['state']['own score'],  # 0. Change in score
-                # np.count_nonzero(obs['board']['own players'] == 1),  # 1. Own number of players on pitch
-                # np.count_nonzero(obs['board']['standing players'] == 1),  # 2. Standing players
-                team_has_ball,  # 1. Team has ball
-                # obs['state']['own reroll available'],  # 4. Number of re-rolls
-                # obs['board']['own players'],  # 5. Own-player layer (movement-event)
-                # obs['state']['own turns'],  # 6. Change in own number of turns
-                obs['state']['is blitz'],  # 2. Change in if current turn is blitz
-                obs['state']['is move action'],  # 3. Is move action
-                obs['state']['is blitz action']  # 4. is blitz action
-                ]
+        return variables
 
-        return vars
+    def get_events(vars, last_vars, outcomes, outcomes_turn, done, first_step, start_half):
+        """
+        0: Winning game
+        1: Touchdowns
+        2: Casualty inflicted or knocking out an opponent
+        3: Knocking down an opponent player
+        4: Pushing opponents out of bounds (crowd surf)
+        5: Causing the opponent to loose the ball
+        6: Opponent failing a dodge
+        7: Successful pass
+        8: Successful handoff
+        9: Closer to endzone per step
+        10: Getting the ball
 
-    def get_events(vars, last_vars):
-        num_events = 5
-        events = np.zeros(num_events)
+        """
+        reward = 0
+        events = np.zeros(args.num_events)
 
-        # Change in score
+        if np.count_nonzero(last_vars) == 0:
+            return events
+
+        # 0: WINNING GAME
+        if done:
+            if last_vars[0] > last_vars[1]:
+                events[0] = 1
+                reward += 5
+
+        # 1 TOUCHDOWNS
         if vars[0] > last_vars[0]:
-            events[0] = 1
-
-        # # Change in own number of players
-        # if vars[1] > last_vars[1]:
-        #     events[1] = 1
-        #
-        # # Change in standing players
-        # if vars[2] > last_vars[2]:
-        #     events[2] = 1
-
-        # Change in if team has acquired ball or still has ball
-        # if vars[3] > last_vars[3]:
-        if vars[1] == 1:
             events[1] = 1
+            reward += 4
 
-        # # Change in number of re-rolls
-        # # It's good to have a high number of re-rolls
-        # if vars[4] > last_vars[4]:
-        #     events[4] = 1
+        # 2: CAUSE CASUALTY OR KNOCK-OUT OPPONENT
+        for outcome in reversed(outcomes):
+            if outcome.outcome_type.value in [73, 43]:
+                opp_players = env.game.state.away_team.players
+                if outcome.player in opp_players and outcome.opp_player is not None:
+                    events[2] = 1
+                    reward += 3
 
-        # # Change in player layer (MOVEMENT)
-        # own_players_curr = vars[5]
-        # own_players_last = last_vars[5]
-        # if not np.array_equal(own_players_curr, own_players_last):
-        #     events[5] = 1
-        #
-        # # Change in own number of turns
-        # # If number of turns is the same as before (i.e. reward it for having the turn)
-        # if vars[6] == last_vars[6]:
-        #     events[6] = 1
+        # 3: KNOCK OPPONENT DOWN
+        for outcome in reversed(outcomes):
+            if outcome.outcome_type.value == 39:
+                opp_players = env.game.state.away_team.players
+                if outcome.player in opp_players and outcome.opp_player is not None:
+                    events[3] = 1
+                    reward += 2
 
-        # Change in if current turn is blitz (Assuming blitzing is good)
-        if vars[2] > last_vars[2]:
-            events[2] = 1
+        # 4: PUSH INTO CROWD
+        for outcome in reversed(outcomes):
+            if outcome.outcome_type.value == 78:
+                opp_players = env.game.state.away_team.players
+                if outcome.player in opp_players:
+                    events[4] = 1
+                    reward += 3
 
-        # Change in if selects move action, if not selected before
-        if vars[3] > last_vars[3]:
-            events[3] = 1
+        # 5: CAUSING THE OPPONENT TO LOOSE BALL
+        if not start_half and not done:
+            if not vars[6] and last_vars[6]:
+                    events[5] = 1
+                    reward += 2
 
-        # Change in if selects blitz actions, if not selected before
-        if vars[4] > last_vars[4]:
-            events[4] = 1
-        return events
+        # 6: OPPONENT FAILING A DODGE
+        if first_step:
+            for outcome in reversed(outcomes_turn):
+                if outcome.outcome_type.value == 49:
+                    opp_players = env.game.state.away_team.players
+                    if outcome.player in opp_players:
+                        events[6] = 1
+                        reward += 1
+
+        # 7: SUCCESSFUL PASS
+        # 8: HANDOFF
+        outcome_idx = len(outcomes)-1
+        for outcome in reversed(outcomes):
+            if outcome.outcome_type.value == 108:
+                own_players = env.game.state.home_team.players
+                if outcome.player in own_players:
+                    if outcomes[outcome_idx - 1].outcome_type.value == 80:  # ACCURATE PASS
+                        events[7] = 1
+                        reward += 3
+                    if outcomes[outcome_idx - 1].outcome_type.value == 57:  # HANDOFF
+                        events[8] = 1
+                        reward += 2
+            outcome_idx -= 1
+
+        # 9: CLOSER TO ENDZONE STEP
+        if vars[2] and last_vars[2]:
+            dist_endzone_last = last_vars[3].x - vars[4]
+            dist_endzone_now = vars[3].x - vars[4]
+            if dist_endzone_now < dist_endzone_last:
+                events[9] = 1
+                reward += 1
+
+        # 10: GETTING THE BALL
+        if vars[2] and not last_vars[2]:
+            if not outcomes[0].outcome_type.value == 103 if len(outcomes) > 0 else True:  # CHECK IF NOT TOUCHBACK
+                events[10] = 1
+                reward += 1
+
+        return events, reward
 
     def check_team_has_ball(obs):
         ball_layer = obs['board']['balls']
         own_player_layer = obs['board']['own players']
+        is_carried = env.game.state.pitch.balls[0].is_carried if len(env.game.state.pitch.balls) > 0 else False
 
         item_index = np.where(ball_layer == 1)
-        if own_player_layer[item_index] == 1:
+        if own_player_layer[item_index] == 1 and is_carried:
             team_has_ball = True
         else:
             team_has_ball = False
         return team_has_ball
 
-    def get_stats():
-        return episode_cnt, total_reward, total_touchdown_cnt, total_interception_cnt, total_pass_cnt, \
-               total_casualty_cnt
+    def check_opponent_has_ball(obs):
+        ball_layer = obs['board']['balls']
+        opponent_player_layer = obs['board']['opp players']
+        is_carried = env.game.state.pitch.balls[0].is_carried if len(env.game.state.pitch.balls) > 0 else False
+
+        item_index = np.where(ball_layer == 1)
+        if opponent_player_layer[item_index] == 1 and is_carried:
+            team_has_ball = True
+        else:
+            team_has_ball = False
+        return team_has_ball
 
     while True:
         command, data = remote.recv()
@@ -130,87 +199,43 @@ def worker(remote, parent_remote, env):
         if command == 'step':
             action = data
             if len(vars) == 0:
-                vars = get_bb_vars(env.last_obs)
+                vars = get_variables(env.last_obs)
+                last_turn_vars = vars
             last_vars = vars
-            events = []
-            try:
-                obs, reward, done, info = env.step(action)
-            except:
-                obs = env.reset()
-                last_touchdowns = 0
-                last_opp_casualties = 0
-                reward = 0
-                done = True
-                info = None
-                events = [0]*5
-                remote.send((obs, reward, done, info, events))
 
-            # INTERCEPTION
-            if action['action-type'] == 20:
-                outcomes = env.game.state.reports[-5:] if len(env.game.state.reports) >= 5 else env.game.state.reports
-                for outcome in reversed(outcomes):
-                    if outcome.outcome_type.value == 46:
-                        reward += 2
-                        print("Interception!")
-                        episode_interception_cnt += 1
+            reports_one_step = len(env.game.state.reports) if env.game.state.reports is not None else 0
 
-            # PASS
-            if action['action-type'] == 24:
-                outcomes = env.game.state.reports[-5:] if len(env.game.state.reports) >= 5 else env.game.state.reports
-                for outcome in reversed(outcomes):
-                    if outcome.outcome_type.value == 108:
-                        print("pass catched")
-                        reward += 1
-                        episode_pass_cnt += 1
-                        break
+            obs, reward, done, info = env.step(action)
 
-            # TOUCHDOWN
             if info is not None:
-                if info['touchdowns'] > last_touchdowns:
-                    reward += 3
-                    print("TOUCHDOWN!")
-                    episode_touchdown_cnt += 1
-                last_touchdowns = info['touchdowns'] if info['touchdowns'] is not None else 0  # always update number of touchdowns to compare next step
+                if round_count < info['round']:
+                    last_turn_vars = vars
+                    first_step_round = True
+                round_count = info['round']
+                if half_count < info['half']:
+                    start_half = True
+                half_count = info['half']
 
-                # CASUALTIES
-                if info['opp_cas_inflicted'] > last_opp_casualties:
-                    outcomes = env.game.state.reports[-20:] if len(env.game.state.reports) >= 5 else env.game.state.reports
-                    player_id = None
-                    for outcome in reversed(outcomes):
-                        if outcome.outcome_type.value == 73:  # If casualty  (If val in [73, 39, 40, 42, 43, 44, 79]:  # CASUALTY ENUM NUMBER)
-                            player_id = outcome.player.player_id
-                        if outcome.outcome_type.value == 119:
-                            if player_id == outcome.player.player_id:
-                                reward += 2
-                                print("Casualty inflicted by block!")
-                                episode_casualty_cnt += 1
-                                break
-                last_opp_casualties = info['opp_cas_inflicted'] if info['opp_cas_inflicted'] is not None else 0  # same as with touchdowns
+            outcomes = env.game.state.reports[reports_one_step:]
+            outcomes_turn = env.game.state.reports[last_turn_vars[5]:]
 
-            vars = get_bb_vars(obs)
-            events = get_events(vars, last_vars)
+            vars = get_variables(obs)
+            events, event_reward = get_events(vars, last_vars, outcomes, outcomes_turn, done, first_step_round, start_half)
+
+            reward = event_reward
+
+            first_step_round = False
+            start_half = False
             step_cnt += 1
-            episode_reward += reward
+            episode_step_count += 1
 
-            if done:
+            if done or episode_step_count > 500:
                 obs = env.reset()
-                last_touchdowns = 0
-                last_opp_casualties = 0
 
-                total_reward += episode_reward
-                total_touchdown_cnt += episode_touchdown_cnt
-                total_interception_cnt += episode_interception_cnt
-                total_pass_cnt += episode_pass_cnt
-                total_casualty_cnt += episode_casualty_cnt
-
-                episode_touchdown_cnt = 0
-                episode_interception_cnt = 0
-                episode_pass_cnt = 0
-                episode_casualty_cnt = 0
-                episode_reward = 0
-                episode_cnt += 1
-
-                vars = get_bb_vars(obs)
+                vars = get_variables(obs)
+                last_turn_vars = vars
+                round_count = 0
+                episode_step_count = 0
 
             remote.send((obs, reward, done, info, events))
 
@@ -219,41 +244,96 @@ def worker(remote, parent_remote, env):
             remote.send(obs)
 
         elif command == 'actions':
-            mask = torch.zeros(37)
+
+            mask = torch.zeros(908, dtype=torch.uint8)
             available_actions = env.available_action_types()
-            for action in available_actions:
-                mask[action] = 1
+            # actions_dictionary = utils.create_action_dictionary_3v3_new_approach()
+            actions_dictionary = utils.create_action_dictionary_5v5_pruned()
+
+            for avail_action in available_actions:
+                for action_dict in actions_dictionary:
+
+                    if avail_action == action_dict['action_index']:
+
+                        positions = env.available_positions(avail_action)
+                        if not positions:
+                            to_mask = action_dict['positions_start']
+                            mask[to_mask] = 1
+                            break
+                        else:
+                            for pos in positions:
+                                try:
+                                    if action_dict['position_type'] == 'adjacent':
+
+                                        active_player = env.game.state.active_player
+                                        active_x = active_player.position.x
+                                        active_y = active_player.position.y
+
+                                        if pos.x < active_x:
+                                            if pos.y < active_y:
+                                                mask[action_dict['positions_start'] + 0] = 1
+                                            elif pos.y == active_y:
+                                                mask[action_dict['positions_start'] + 3] = 1
+                                            else:
+                                                mask[action_dict['positions_start'] + 5] = 1
+                                        elif pos.x == active_x:
+                                            if pos.y < active_y:
+                                                mask[action_dict['positions_start'] + 1] = 1
+                                            else:
+                                                mask[action_dict['positions_start'] + 6] = 1
+                                        else:
+                                            if pos.y < active_y:
+                                                mask[action_dict['positions_start'] + 2] = 1
+                                            elif pos.y == active_y:
+                                                mask[action_dict['positions_start'] + 4] = 1
+                                            else:
+                                                mask[action_dict['positions_start'] + 7] = 1
+
+                                    elif action_dict['position_type'] == 'full_board':
+                                        x = pos.x
+                                        y = pos.y
+                                        # mask_pos = x + 14 * y  # 3v3 full board
+                                        mask_pos = x + 18 * y  # 3v3 full board
+                                        mask[action_dict['positions_start'] + mask_pos] = 1
+
+                                    else:
+                                        player_idx = 0
+                                        for player in env.game.state.home_team.players:
+                                            if player.position == pos:
+                                                mask[action_dict['positions_start'] + player_idx] = 1
+                                            player_idx += 1
+
+                                except:
+                                    a = 1
+                            break
+
             remote.send(mask)
 
-        elif command == 'positions':
-            action = data
-            action = action.data.squeeze(0).numpy()  # In order for env to handle it
-            mask = torch.zeros(7*14+1)
-            available_positions = env.available_positions(action)
-            if len(available_positions) == 0:
-                mask[-1] = 1
+        elif command == 'active_players':
+            active_player = env.game.state.active_player
+            if active_player is not None and active_player.position is not None:
+                active_x = active_player.position.x
+                active_y = active_player.position.y
+                position_index = active_x + 18 * active_y
             else:
-                for pos in available_positions:
-                    new_pos = pos.x + 14 * pos.y
-                    mask[new_pos] = 1
-            remote.send(mask)
+                position_index = -1
+            remote.send(position_index)
+
+        elif command == 'own_players':
+            own_players = []
+            for player in env.game.state.home_team.players:
+                if player.position is not None:
+                    x = player.position.x
+                    y = player.position.y
+                    position_index = x + 18 * y
+                    own_players.append(position_index)
+                else:
+                    position_index = -1
+                    own_players.append(position_index)
+            remote.send(own_players)
 
         elif command == 'render':
             env.render()
-
-        elif command == "log":
-            epi_cnt, tot_reward, tot_touchdown_cnt, tot_interception_cnt, tot_pass_cnt, \
-                tot_casualty_cnt = get_stats()
-
-            episode_cnt = 0
-            total_reward = 0
-            total_touchdown_cnt = 0
-            total_interception_cnt = 0
-            total_pass_cnt = 0
-            total_casualty_cnt = 0
-
-            remote.send((epi_cnt, tot_reward, tot_touchdown_cnt, tot_interception_cnt, tot_pass_cnt,
-                        tot_casualty_cnt))
 
 
 class VecEnv():
@@ -296,29 +376,33 @@ class VecEnv():
             cumul_events = events
         else:
             cumul_events = np.add(cumul_events, events)
-        return np.stack(obs), cumul_rewards, cumul_dones, infos, cumul_events
+        return np.stack(obs), cumul_rewards, cumul_dones, infos, np.stack(cumul_events)
 
     def actions(self):
         for remote in self.remotes:
             remote.send(('actions', None))
-        return torch.stack(([remote.recv() for remote in self.remotes]))
+        results = [remote.recv() for remote in self.remotes]
+        try:
+            results = torch.stack(results)
+        except TypeError:
+            print("Error")
+            print(results)
+        return results
 
-    def positions(self, actions):
-        for remote, action in zip(self.remotes, actions):
-            remote.send(('positions', action))
-        return torch.stack([remote.recv() for remote in self.remotes])
+    def active_players(self):
+        for remote in self.remotes:
+            remote.send(('active_players', None))
+        return [remote.recv() for remote in self.remotes]
+
+    def own_players(self):
+        for remote in self.remotes:
+            remote.send(('own_players', None))
+        return [remote.recv() for remote in self.remotes]
 
     def reset(self):
         for remote in self.remotes:
             remote.send(('reset', None))
         return np.stack([remote.recv() for remote in self.remotes])
-
-    def log(self):
-        for remote in self.remotes:
-            remote.send(('log', None))
-        results = [remote.recv() for remote in self.remotes]
-        episodes, rewards, touchdowns, interceptions, passes, casualties = zip(*results)
-        return np.stack(episodes), np.stack(rewards), np.stack(touchdowns), np.stack(interceptions), np.stack(passes), np.stack(casualties)
 
     def render(self):
         for remote in self.remotes:
