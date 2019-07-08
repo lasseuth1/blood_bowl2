@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import rarity_of_events.arguments as args
 
 
 class FFPolicy(nn.Module):
@@ -11,71 +12,42 @@ class FFPolicy(nn.Module):
     def forward(self, x, y):
         raise NotImplementedError
 
-    def act(self, spatial_inputs, non_spatial_input, avail_actions, envs):
-        value, policy, position = self(spatial_inputs, non_spatial_input)
-        num_processes = envs.num_envs
+    def act(self, spatial_inputs, non_spatial_input, actions_mask):
 
-        probs_action = F.softmax(policy, dim=0)
-        temp_action = probs_action * avail_actions
-        probs_action *= avail_actions
-        summed_actions = torch.sum(probs_action, dim=1)
-        normalized_actions = torch.div(probs_action, summed_actions.view(num_processes, 1))
+        # The model returns a value, policy for actions, and positions
+        # value, policy = self(spatial_inputs, non_spatial_input)
+        #
+        # probs_action = F.softmax(policy, dim=1)
+        #
+        # actions = probs_action.multinomial(1)
 
-        try:
-            actions = normalized_actions.multinomial(1)
-        except RuntimeError:
-            actions = avail_actions.multinomial(1)
+        value, policy = self(spatial_inputs, non_spatial_input)
 
-        avail_positions = envs.positions(actions)
-        probs_position = F.softmax(position, dim=0)
-        temp_position = probs_position * avail_positions
-        probs_position *= avail_positions
-        summed_pos = torch.sum(probs_position, dim=1)
-        normalized_pos = torch.div(probs_position, summed_pos.view(num_processes, 1))
+        policy[~actions_mask] = float('-inf')  # Masking step: Inspired by: http://juditacs.github.io/2018/12/27/masked-attention.html
+        policy = F.softmax(policy, dim=1)
 
-        # Make action objects
-        action_objects = []
-        positions_collected = torch.zeros(num_processes, 1)
-        for i in range(num_processes):
-            action = actions[i]  # get action
-            pos = normalized_pos[i]  # get position tensor
-            try:
-                pos = pos.multinomial(1)
-                pos = pos.item()
-            except RuntimeError:
-                pos = avail_positions[i].multinomial(1)
-                pos = pos.item()
+        actions = policy.multinomial(1)
 
-            action_object = {
-                'action-type': action.item(),
-                'x': int(pos % 14) if pos is not 98 else None,
-                'y': int(pos / 14) if pos is not 98 else None,
-            }
+        return value, actions
 
-            positions_collected[i] = pos
+    def evaluate_actions(self, spatial_inputs, non_spatial_input, actions, actions_mask):
+        # gets values, actions, and positions
+        value, policy = self(spatial_inputs, non_spatial_input)
 
-            action_objects.append(action_object)
+        # actions_mask = actions_mask.view(-1, 1, 242).squeeze()
+        actions_mask = actions_mask.view(-1, 1, 1078).squeeze()
 
-        return value, actions, action_objects, positions_collected
-        # return value, actions, position
+        policy[~actions_mask] = float('-inf')
 
-    def evaluate_actions(self, spatial_inputs, non_spatial_input, actions, positions):
-        """
-        Calls forward() function
-        """
-        value, x, pos = self(spatial_inputs, non_spatial_input)
-
-        log_probs = F.log_softmax(x)
-        probs = F.softmax(x)
+        log_probs = F.log_softmax(policy)
+        probs = F.softmax(policy)
         action_log_probs = log_probs.gather(1, actions)
 
-        pos_log_probs = F.log_softmax(pos)
-        pos_probs = F.softmax(pos)
-        position_log_probs = pos_log_probs.gather(1, positions)
+        log_probs = torch.where(log_probs[None, :] == float('-inf'), torch.tensor(0.), log_probs)
 
         dist_entropy = -(log_probs * probs).sum(-1).mean()
 
-        return action_log_probs, value, position_log_probs, dist_entropy
+        return action_log_probs, value, dist_entropy
 
 
 class CNNPolicy(FFPolicy):
@@ -83,18 +55,19 @@ class CNNPolicy(FFPolicy):
         super(CNNPolicy, self).__init__()
 
         # num_inputs is 26 (number of feature layers)
-        self.conv1 = nn.Conv2d(num_inputs, out_channels=52, kernel_size=2)
-        self.conv2 = nn.Conv2d(in_channels=52, out_channels=26, kernel_size=2)
+        self.conv1 = nn.Conv2d(num_inputs, out_channels=16, kernel_size=3, stride=1, padding=1)
+        self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=2, stride=1, padding=1)
 
         # Linear layers
         self.linear1 = nn.Linear(49, 24)
-        # self.linear2 = nn.Linear(98, 49)
 
-        # The actor and the critic outputs
-        self.critic = nn.Linear(26 * 5 * 12 + 24, 1)
-        self.actor = nn.Linear(26 * 5 * 12 + 24, action_space_shape)
-        # chose a position among the 7 * 14 squares on the board
-        self.position = nn.Linear(26 * 5 * 12 + 24, 7 * 14 + 1)
+        # The outputs for 1v1
+        # self.critic = nn.Linear(1368, 1)
+        # self.actor = nn.Linear(1368, 242)
+
+        # The outputs for 3v3
+        self.critic = nn.Linear(3864, 1)
+        self.actor = nn.Linear(3864, 1078)
 
         self.train()
         self.reset_parameters()
@@ -104,7 +77,6 @@ class CNNPolicy(FFPolicy):
         self.conv1.weight.data.mul_(relu_gain)
         self.conv2.weight.data.mul_(relu_gain)
         self.linear1.weight.data.mul_(relu_gain)
-        # self.linear2.weight.data.mul_(relu_gain)
 
     def forward(self, spatial_input, non_spatial_input):
         """
@@ -116,19 +88,20 @@ class CNNPolicy(FFPolicy):
         x = self.conv2(x)
         x = F.relu(x)
 
-        # Non-spatial input through two linear layers (fully-connected)
+        # Non-spatial input through one linear layer (fully-connected)
         y = self.linear1(non_spatial_input)
         y = F.relu(y)
-        # y = self.linear2(y) # kan være det ikke er nødvendigt
-        # y = F.relu(y)
 
         # Concatenate the outputs
-        concatenated = torch.cat((x.flatten(), y.flatten()), dim=0)
-        # Reshaping the tensor to have a dimensions (1, 1609)
-        concatenated = concatenated.view(-1, 26 * 5 * 12 + 24)
+        flatten_x = x.flatten(start_dim=1)
+        flatten_y = y.flatten(start_dim=1)
+        concatenated = torch.cat((flatten_x, flatten_y), dim=1)
 
-        # Return value, policy, spatial-position
-        return self.critic(concatenated), self.actor(concatenated), self.position(concatenated)
+        value = self.critic(concatenated)
+        policy = self.actor(concatenated)
+
+        # return value, policy
+        return value, policy
 
     def get_action_probs(self, spatial_input, non_spatial_input):
         x, y = self(spatial_input, non_spatial_input)
