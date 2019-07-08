@@ -12,43 +12,28 @@ def plot_training():
             lines = log.readlines()
             x = [float(line.split(",")[3]) for line in lines]  # time steps
             z = [float(line.split(",")[5]) for line in lines]  # reward
-            # h = [float(line.split(",")[5]) for line in lines]  # mean reward
-            # w = [float(line.split(",")[2]) for line in lines]  # episodes this update
-            # z = [float(line.split(",")[6]) for line in lines]  # touchdown
-            # d = [0 for i in range(1288)] # mean reward step
-            #
-            # for i in np.arange(len(y)):
-            #     reward_td = float(z[i]*10)
-            #     z[i] = reward_td
-            #     if w[i] != 0:
-            #         d[i] = (y[i] - reward_td) / w[i]
-            #     if z[i] != 0:
-            #         pr_episode = float(z[i]/w[i])
-            #         z[i] = pr_episode
+       
 
 
             xs = []
             zs = []
-            # ds = []
-            # hs = []
+
             for i in np.arange(0, len(x)):
                 mean_x = []
                 mean_z = []
-                # mean_d = []
-                # mean_h = []
+
+
                 if i == 0:
                     mean_x.append(x[i])
                     mean_z.append(z[i])
-                    # mean_d.append(d[i])
-                    # mean_h.append(h[i])
+
                 for j in np.arange(max(0, i - round(10 / 2)), min(i + round(10 / 2), len(x))):
                     mean_x.append(x[j])
                     mean_z.append(z[j])
 
                 xs.append(np.mean(mean_x))
                 zs.append(np.mean(mean_z))
-                # ds.append(np.mean(mean_d))
-                # hs.append(np.mean(mean_h))
+
 
         fig, ax = plt.subplots(nrows=1, ncols=1)
         plt.rcParams.update({'font.size': 14})
@@ -64,9 +49,6 @@ def plot_training():
 
         plt.plot(xs, zs, color='blue', label='A2C', linestyle="-")
        # plt.plot(x, z, color='blue', linewidth=1, alpha=0.2)  # noise
-
-
-        #plt.plot(x, y, color='orange', linewidth=1, alpha=0.3)  # noise
 
         plt.title("1v1", fontsize=18)
 
