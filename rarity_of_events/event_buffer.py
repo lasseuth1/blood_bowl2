@@ -42,3 +42,4 @@ class EventBuffer:
 
     def get_event_rewards(self):
         return self.intrinsic_reward(np.ones(self.n), vector=True)
+    # k
