@@ -6,19 +6,23 @@ Year: 2018
 This module contains the Game class, which is the main class used to interact with a game in FFAI.
 """
 
+from ffai.core.model import *
 from ffai.core.procedure import *
 from ffai.core.load import *
 from copy import deepcopy
 import numpy as np
 import multiprocessing
+import pickle
+import random
 
 
 class Game:
 
-    def __init__(self, game_id, home_team, away_team, home_agent, away_agent, config=None, arena=None, ruleset=None, state=None, seed=None):
+    def __init__(self, game_id, home_team, away_team, home_agent, away_agent, config=None, arena=None, ruleset=None, state=None, seed=None, auto_save=False):
         assert config is not None or arena is not None
         assert config is not None or ruleset is not None
         assert home_team.team_id != away_team.team_id
+        self.auto_save = auto_save
         self.game_id = game_id
         self.home_agent = home_agent
         self.away_agent = away_agent
@@ -27,32 +31,23 @@ class Game:
         self.config = config
         self.ruleset = get_rule_set(config.ruleset) if ruleset is None else ruleset
         self.state = state if state is not None else GameState(self, deepcopy(home_team), deepcopy(away_team))
-        self.seed = seed
+        self.seed = random.seed(a=seed, version=2)
         self.rnd = np.random.RandomState(self.seed)
 
-    def clone(self):
-        """
-        Clones the Game object but retains references to objects that shouldn't be modified. This should be faster
-        than deepcopy.
-        :return: A clone of the Game object.
-        """
-        state = self.state.clone()
-        game = Game(game_id=self.game_id,
-                    home_team=state.home_team,
-                    away_team=state.away_team,
-                    home_agent=self.home_agent,
-                    away_agent=self.away_agent,
-                    config=self.config,
-                    ruleset=self.ruleset,
-                    arena=self.arena,
-                    state=state,
-                    seed=None)
-        game.actor = self.actor
-        return game
+        self.start_time = None
+        self.end_time = None
+        self.disqualified_agent = None
+        self.last_request_time = None
+        self.last_action_time = None
+        self.forced_action = None
+
+        self.action = None
 
     def to_json(self):
         return {
             'game_id': self.game_id,
+            'start_time': self.start_time,
+            'end_time': self.end_time,
             'state': self.state.to_json(),
             'stack': self.procs(),
             'home_agent': self.home_agent.to_json(),
@@ -61,49 +56,203 @@ class Game:
             'arena': self.arena.to_json(),
             'ruleset': self.ruleset.name,
             'can_home_team_use_reroll': self.can_use_reroll(self.state.home_team),
-            'can_away_team_use_reroll': self.can_use_reroll(self.state.away_team)
+            'can_away_team_use_reroll': self.can_use_reroll(self.state.away_team),
+            'actor_id': self.actor.agent_id if self.actor is not None else None,
+            'disqualified_agent_id': self.disqualified_agent.agent_id if self.disqualified_agent is not None else None,
+            'time_limits': self.config.time_limits.to_json(),
+            'active_other_player_id': self.active_other_player_id()
         }
 
-    def team_agent(self, team):
-        """
-        :param team:
-        :return: The agent who's controlling the specified team.
-        """
-        if team == self.state.home_team:
-            return self.home_agent
-        return self.away_agent
-
-    def _squares_moved(self):
-        """
-        :return: The squares moved by the active player.
-        """
-        for proc in self.state.stack.items:
-            if isinstance(proc, PlayerAction):
-                out = []
-                for square in proc.squares:
-                    out.append(square.to_json())
-                return out
-        return []
-
-    def set_seed(self, seed):
-        self.seed = seed
-        self.rnd = np.random.RandomState(self.seed)
+    def _safe_clone(self):
+        # Make dummy agents for the clone
+        home_agent = self.home_agent
+        away_agent = self.away_agent
+        self.home_agent = Agent(home_agent.name, agent_id=home_agent.agent_id)
+        self.away_agent = Agent(away_agent.name, agent_id=away_agent.agent_id)
+        clone = deepcopy(self)
+        self.home_agent = home_agent
+        self.away_agent = away_agent
+        return clone
 
     def init(self):
         """
-        Initialized the Game. The START_GAME action must still be called after this.
+        Initialized the Game. The START_GAME action must still be called after this if humans are in the game.
         """
         EndGame(self)
         Pregame(self)
         if not self.away_agent.human:
-            #game_copy_away = deepcopy(self)
-            game_copy_away = self
+            game_copy_away = self._safe_clone()
+            self.actor = self.away_agent
             self.away_agent.new_game(game_copy_away, game_copy_away.state.away_team)
+            self.actor = None
         if not self.home_agent.human:
-            #game_copy_home = deepcopy(self)
-            game_copy_home = self
+            self.actor = self.home_agent
+            game_copy_home = self._safe_clone()
+            self.actor = None
             self.home_agent.new_game(game_copy_home, game_copy_home.state.home_team)
-        self.set_available_actions()
+        # Start game if no humans
+        if not self.away_agent.human and not self.home_agent.human:
+            self.set_available_actions()
+            self.step(Action(ActionType.START_GAME))
+        else:
+            self.set_available_actions()
+
+    def step(self, action=None):
+        """
+        Runs until an action from a human is required. If game requires an action to continue one must be given.
+        :param action: Action to perform, can be None if game does not require any.
+        :return:
+        """
+
+        # Ensure player points to player object
+        if action is not None:
+            action.player = self.get_player(action.player.player_id) if action.player is not None else None
+            action.pos = Square(action.pos.x, action.pos.y) if action.pos is not None else None
+
+        # Set action as a property so other methods can access it
+        self.action = action
+
+        # Update game
+        while True:
+
+            # Perform game step
+            done = self._one_step(self.action)
+
+            # Game over
+            if self.state.game_over:
+                self._end_game()
+                return
+            
+            # if procedure is ready for input
+            if done:
+
+                # If human player - wait for input
+                if self.actor.human:
+                    return
+
+                # Query agent for action
+                self.last_request_time = time.time()
+                self.action = self._checksum_act()
+                # self.action = self._safe_act()
+                
+                # Check if time limit was violated
+                self.last_action_time = time.time()
+                self.check_clocks()  # Might modify the action if clock was violated
+
+                # Did the game terminate?
+                if self.state.game_over:
+                    return
+                
+            else:
+
+                # If not in fast mode - wait for input before continuing
+                if not self.config.fast_mode:
+                    return
+                
+                # Else continue procedure with no action
+                self.action = None
+
+    def refresh(self):
+        """
+        Checks clocks and runs forced actions. Can be called in human games.
+        """
+        self.action = None
+        self.check_clocks()
+        if self.action is not None:
+            self.step(self.action)
+
+    def check_clocks(self):
+        """
+        Checks if clocks are done.
+        """
+        # Only use clocks in competition mode
+        if not self.config.competition_mode:
+            return
+
+        # Timed out?
+        if self.timed_out():
+            print("Game timed out")
+            self.action = None
+            self.remove_clocks()
+            self.disqualified_agent = self.actor
+            self.report(Outcome(OutcomeType.END_OF_GAME_DISQUALIFICATION, team=self.agent_team(self.actor)))
+            self._end_game()
+            return
+
+        # No time limit for this action
+        if not self.has_agent_clock(self.actor):
+            return
+
+        # Agent too slow?
+        clock = self.get_agent_clock(self.actor)
+        if clock.is_done():
+            
+            # Disqualification? Relevant for hanging bots in competitions
+            if clock.running_time() > clock.seconds + self.config.time_limits.disqualification:
+                print(f"Time violation. {self.actor.name} will be disqualified!")
+                self.action = None
+                self.remove_clocks()
+                self.disqualified_agent = self.actor
+                self.report(Outcome(OutcomeType.END_OF_GAME_DISQUALIFICATION, team=self.agent_team(self.actor)))
+                self._end_game()
+                return
+
+            # End the actor's turn
+            done = True
+            actor = self.actor
+            clock = self.get_agent_clock(actor)
+            while clock in self.state.clocks:
+                
+                # Request timout action
+                if done:
+                    action = self._forced_action()
+                else:
+                    action = None
+
+                # Take action if it doesn't end the turn
+                if self.action is None or self.action.action_type not in [ActionType.END_TURN, ActionType.END_SETUP]:
+                    if self.config.debug_mode:
+                        print("Forced step action")
+                    done = self._one_step(action)
+                else:
+                    if self.config.debug_mode:
+                        print(f"Forcing action: {self.action.to_json() if self.action is not None else 'None'}")
+                    self.action = action
+                    break
+            
+    def _end_game(self):
+        '''
+        End the game
+        '''
+        # Game ended when the last action was received - to avoid timout during finishing procedures
+        self.state.end_time = self.last_action_time
+        self.state.game_over = True
+
+        # Let agents know that the game ended
+        if not self.home_agent.human:
+            self.actor = self.home_agent  # In case it crashes or timeouts we have someone to blame
+            now = time.time()
+            if self.config.competition_mode:
+                self.actor = self.home_agent
+                self.home_agent.end_game(self._safe_clone())
+                self.actor = None
+            else:
+                self.home_agent.end_game(self)
+            # Disqualify if too long
+            if self.config.competition_mode and time.time() > now + self.config.time_limits.end:
+                self.disqualified_agent = self.home_agent
+        if not self.away_agent.human:
+            self.actor = self.away_agent  # In case it crashes or timeouts we have someone to blame
+            now = time.time()
+            if self.config.competition_mode:
+                self.actor = self.away_agent
+                self.away_agent.end_game(self._safe_clone())
+                self.actor = None
+            else:
+                self.away_agent.end_game(self)
+            # Disqualify if too long
+            if self.config.competition_mode and time.time() > now + self.config.time_limits.end:
+                self.disqualified_agent = self.home_agent
 
     def _is_action_allowed(self, action):
         """
@@ -131,95 +280,69 @@ class Game:
                     print("Illegal player", action.action_type, action.player, self.state.stack.peek())
                     return False
                 if len(action_choice.positions) > 0 and action.pos not in action_choice.positions:
-                    print("Illegal position", action.pos.to_json(), action.action_type.name)
+                    # print("Illegal position", action.pos.to_json(), action.action_type.name)
                     return False
                 return True
         return False
 
-    def step(self, action=None):
-        """
-        Runs until an action from a human is required. If game requires an action to continue one must be given.
-        :param action: Action to perform, can be None if game does not require any.
-        :return:
-        """
+    def _safe_act(self):
+        '''
+        Clone the game before requesting an action so agent can't manipulate it.
+        '''
+        if self.config.competition_mode:
+            action = self.actor.act(self._safe_clone())
+            # Correct player object
+            if action.player is not None:
+                action.player = self.state.player_by_id[action.player.player_id]
+            return action
+        return self.actor.act(self)
 
-        # Ensure player points to player object
-        if action is not None:
-            action.player = self.get_player(action.player.player_id) if action.player is not None else None
-            action.pos = Square(action.pos.x, action.pos.y) if action.pos is not None else None
+    def _checksum_act(self):
+        '''
+        If in competition_mode, compare json-values before and after sending the game instance so agents get disqualified if they manipulated the game object.
+        '''
+        if self.config.competition_mode:
+            # Hide agents
+            actor = self.actor
+            home_agent = self.home_agent
+            away_agent = self.away_agent
+            self.actor = Agent(actor.name, agent_id=actor.agent_id)
+            self.home_agent = Agent(home_agent.name, agent_id=home_agent.agent_id)
+            self.away_agent = Agent(away_agent.name, agent_id=away_agent.agent_id)
 
-        # Update game
-        while True:
-            done = self._one_step(action)
-            if self.state.game_over:
-                if not self.home_agent.human:
-                    if self.config.competition_mode:
-                        self._end_game_in_parallel(self.home_agent)
-                    else:
-                        self.home_agent.end_game(self)
-                if not self.away_agent.human:
-                    if self.config.competition_mode:
-                        self._end_game_in_parallel(self.away_agent)
-                    else:
-                        self.away_agent.end_game(self)
-                return
-            if done:
-                if self.actor.human:
-                    return
-                if self.config.competition_mode:
-                    action = self._get_action_in_parrallel()
-                else:
-                    action = self.actor.act(self)
-            else:
-                if not self.config.fast_mode:
-                    return
-                action = None
+            id_before = id(self)
+            checksum_before = self.to_json()
+            checksum_before['state']['clocks'] = None
+            action = actor.act(self)
+            checksum_after = self.to_json()
+            checksum_after['state']['clocks'] = None
+            id_after = id(self)
 
-    def _end_game_in_parallel(self, actor):
-        p = multiprocessing.Process(target=self.actor.end_game(), args=(self,), name=('agent_' + self.actor.name))
-        p.start()
-        action = None
-        t = time.time()
-        while p.is_alive() and time.time() < t + 10:
-            time.sleep(.1)
-        p.terminate()
-        p.join()
-        return action
+            self.actor = actor
+            self.home_agent = home_agent
+            self.away_agent = away_agent
 
-    def _get_action_in_parrallel(self):
-        manager = multiprocessing.Manager()
-        return_dict = manager.dict()
-        p = multiprocessing.Process(target=self._get_action_worker, args=(return_dict,), name=('agent_' + self.actor.name))
-        p.start()
-        action = None
-        while p.is_alive():
-            if self.state.termination_opp is not None:
-                if time.time() > self.state.termination_opp:
-                    action = self._timeout_action()
-                    p.terminate()
-                    p.join()
-                    break
-            elif self.state.termination_turn is not None:
-                if time.time() > self.state.termination_turn:
-                    action = self._timeout_action()
-                    p.terminate()
-                    p.join()
-                    break
-            time.sleep(.1)
-        else:
-            # We only enter this if we didn't 'break' above
-            p.join()
-            action = return_dict['action']
-        return action
+            # If game instance was manipulated
+            if not (checksum_after.__eq__(checksum_before) and id_after == id_before):
+                self.disqualified_agent = self.actor
+                self._end_game()
+                return None
 
-    def _get_action_worker(self, return_dict):
-        action = self.actor.act(self)
-        return_dict['action'] = action
+            # Correct player object
+            if action.player is not None:
+                action.player = self.state.player_by_id[action.player.player_id]
+            return action
+        return self.actor.act(self)
 
-    def _timeout_action(self):
+    def _forced_action(self):
+        '''
+        Return action that prioritize to end the player's turn.
+        '''
         # Take first negative action
-        for action_type in [ActionType.END_TURN, ActionType.END_SETUP, ActionType.END_PLAYER_SETUP, ActionType.HEADS, ActionType.KICK, ActionType.DONT_USE_REROLL, ActionType.DONT_USE_APOTHECARY, ActionType.DONT_FOLLOW_UP]:
+        for action_type in [ActionType.END_TURN, ActionType.END_SETUP, ActionType.END_PLAYER_TURN, ActionType.SELECT_NONE, ActionType.HEADS, ActionType.KICK, ActionType.SELECT_DEFENDER_DOWN, ActionType.SELECT_DEFENDER_STUMBLES, ActionType.SELECT_ATTACKER_DOWN, ActionType.SELECT_PUSH, ActionType.SELECT_BOTH_DOWN, ActionType.DONT_USE_REROLL, ActionType.DONT_USE_APOTHECARY]:
             for action in self.state.available_actions:
+                if action_type == ActionType.END_SETUP and not self.is_setup_legal(self.agent_team(self.actor)):
+                    continue
                 if action.action_type == action_type:
                     return Action(action_type)
         # Take random action
@@ -227,6 +350,22 @@ class Game:
         pos = self.rnd.choice(action_choice.positions) if len(action_choice.positions) > 0 else None
         player = self.rnd.choice(action_choice.players) if len(action_choice.players) > 0 else None
         return Action(action_choice.action_type, pos=pos, player=player)
+    
+    def _squares_moved(self):
+        """
+        :return: The squares moved by the active player in json - used by the web app.
+        """
+        for proc in self.state.stack.items:
+            if isinstance(proc, PlayerAction):
+                out = []
+                for square in proc.squares:
+                    out.append(square)
+                if proc.player is not None and proc.player.position is not None:
+                    if len(out) > 0 and out[-1] != proc.player.position:
+                        out = out[:-1]
+                out = [sq.to_json() for sq in out]
+                return out
+        return []
 
     def _one_step(self, action):
         """
@@ -257,30 +396,30 @@ class Game:
             if action.action_type == ActionType.CONTINUE:
                 if len(self.state.available_actions) == 0:
                     # Consider this as a None action
-                    action.action_type = None
+                    action = None
                 else:
                     if self.config.debug_mode:
                         print("CONTINUE action is not allowed when actions are available")
                     return True  # Game needs user input
             else:
-                # Only allow
+                # Only allowed actions
                 if not self._is_action_allowed(action):
+                    if self.config.debug_mode:
+                        print(f"Action not allowed {action.to_json() if action is not None else 'None'}")
                     return True  # Game needs user input
-
-        # Reset opp termination time as action is allowed
-        self.state.termination_opp = None
 
         # Run proc
         if self.config.debug_mode:
             print("Proc={}".format(proc))
-            print("Action={}".format(action.action_type if action is not None else ""))
+            print("Action={}".format(action.action_type if action is not None else "None"))
 
         proc.done = proc.step(action)
 
         if self.config.debug_mode:
             print("Done={}".format(proc.done))
+            print(f"DONE={self.state.stack.peek().done}")
 
-        # Enable if cloning happens
+        # Used if players was accidently cloned
         if self.config.debug_mode:
             for y in range(len(self.state.pitch.board)):
                 for x in range(len(self.state.pitch.board)):
@@ -307,11 +446,16 @@ class Game:
 
         # Initialize if not
         if not self.state.stack.peek().initialized:
-            self.state.stack.peek().setup()
-            self.state.stack.peek().initialized = True
+            proc = self.state.stack.peek()
+            proc.setup()
+            proc.initialized = True
 
         # Update available actions
         self.set_available_actions()
+
+        if self.config.debug_mode:
+            print(f"{len(self.state.available_actions)} available actions")
+
         if len(self.state.available_actions) == 0:
             return False  # Can continue without user input
 
@@ -321,6 +465,121 @@ class Game:
             return False  # We can continue without user input
 
         return True  # Game needs user input
+    
+    def remove_clocks(self):
+        '''
+        Remove all clocks.
+        '''
+        self.state.clocks.clear()
+
+    def remove_secondary_clocks(self):
+        '''
+        Remove all secondary clocks and resume the primary clock - if any.
+        '''
+        self.state.clocks = [clock for clock in self.state.clocks if clock.is_primary]
+        for clock in self.state.clocks:
+            if not clock.is_running():
+                clock.resume()
+
+    def get_clock(self, team):
+        '''
+        Returns the clock belonging to the given team.
+        '''
+        for clock in self.state.clocks:
+            if clock.team == team:
+                return clock
+        return None
+
+    def get_agent_clock(self, agent):
+        '''
+        Returns the clock belonging to the given agent's team.
+        '''
+        for clock in self.state.clocks:
+            if clock.team == self.agent_team(agent):
+                return clock
+        return None
+
+    def has_clock(self, team):
+        '''
+        Returns true if the given team has a clock.
+        '''
+        for clock in self.state.clocks:
+            if clock.team == team:
+                return True
+        return False
+
+    def has_agent_clock(self, agent):
+        '''
+        Returns true if the given agent's team has a clock.
+        '''
+        for clock in self.state.clocks:
+            if clock.team == self.agent_team(agent):
+                return True
+        return False
+
+    def pause_clocks(self):
+        '''
+        Pauses all clocks.
+        '''
+        for clock in self.state.clocks:
+            if clock.is_running():
+                clock.pause()
+
+    def add_secondary_clock(self, team):
+        '''
+        Adds a secondary clock for quick decisions.
+        '''
+        self.pause_clocks()
+        assert team is not None and type(team) == Team
+        clock = Clock(team, self.config.time_limits.secondary)
+        self.state.clocks.append(clock)
+
+    def add_primary_clock(self, team):
+        '''
+        Adds a primary clock that will be paused if secondary clocks are added.
+        '''
+        self.state.clocks.clear()
+        assert team is not None and type(team) == Team
+        clock = Clock(team, self.config.time_limits.turn, is_primary=True)
+        self.state.clocks.append(clock)
+
+    def seconds_left(self, team):
+        '''
+        Returns the number of seconds left on the clock for the given team and None if the given team has no clock.
+        '''
+        for clock in self.state.clocks:
+            if clock.team == team:
+                return clock.seconds_left()
+        return None
+        
+    def team_agent(self, team):
+        """
+        :param team:
+        :return: The agent who's controlling the specified team.
+        """
+        if team is None:
+            return None
+        if team == self.state.home_team:
+            return self.home_agent
+        return self.away_agent
+
+    def agent_team(self, agent):
+        """
+        :param team:
+        :return: The team controlled by the specified agent.
+        """
+        if agent is None:
+            return None
+        if agent == self.home_agent:
+            return self.state.home_team
+        return self.state.away_team
+
+    def set_seed(self, seed):
+        '''
+        Sets the random seed of the game.
+        '''
+        self.seed = seed
+        self.rnd = np.random.RandomState(self.seed)
 
     def set_available_actions(self):
         """
@@ -334,7 +593,7 @@ class Game:
                 self.actor = self.home_agent
             elif self.state.available_actions[0].team == self.state.away_team:
                 self.actor = self.away_agent
-
+    
     def report(self, outcome):
         """
         Adds the outcome to the game's reports.
@@ -411,7 +670,7 @@ class Game:
         """
         Adds or removes a number of turns from the current half. This method will raise an assertion error if the turn
         counter goes to a negative number.
-        :param turns: The number of turns to add (if positive) or remove (if negative).
+        :param turns: The number of turns to add (if positive) or remove (if negative). 
         """
         for team in self.state.teams:
             team.state.turn += turns
@@ -419,14 +678,14 @@ class Game:
 
     def get_player(self, player_id):
         """
-        :param player_id:
+        :param player_id: 
         :return: Returns the player with player_id
         """
         return self.state.player_by_id[player_id]
 
     def get_player_at(self, pos):
         """
-        :param pos:
+        :param pos: 
         :return: Returns the player at pos else None.
         """
         return self.state.pitch.board[pos.y][pos.x]
@@ -483,38 +742,41 @@ class Game:
 
     def get_opp_team(self, team):
         """
-        :param team:
+        :param team: 
         :return: The opponent team of team.
         """
         return self.state.home_team if self.state.away_team == team else self.state.away_team
 
+    def get_dugout(self, team):
+        return self.state.dugouts[team.team_id]
+
     def get_reserves(self, team):
         """
-        :param team:
+        :param team: 
         :return: The reserves in the dugout of this team.
         """
-        return self.state.get_dugout(team).reserves
+        return self.get_dugout(team).reserves
 
     def get_kods(self, team):
         """
         :param team:
         :return: The knocked out players in the dugout of this team.
         """
-        return self.state.get_dugout(team).kod
+        return self.get_dugout(team).kod
 
     def get_casualties(self, team):
         """
         :param team:
         :return: The badly hurt, injured, and dead players in th dugout of this team.
         """
-        return self.state.get_dugout(team).casualties
+        return self.get_dugout(team).casualties
 
     def get_dungeon(self, team):
         """
         :param team:
         :return: The ejected players of this team, who's locked to a cell in the dungeon.
         """
-        return self.state.get_dugout(team).dungeon
+        return self.get_dugout(team).dungeon
 
     def current_turn(self):
         """
@@ -646,9 +908,13 @@ class Game:
         :param up: If specified, filter by ther players up state.
         :return: Players on the pitch who's on team.
         """
-        return [player for player in team.players
-                if player.position is not None and (used is None or used == player.state.used) and
-                (up is None or up == player.state.up)]
+        players = []
+        for y in range(len(self.state.pitch.board)):
+            for x in range(len(self.state.pitch.board[y])):
+                player = self.state.pitch.board[y][x]
+                if player is not None and player.team == team and (used is None or used == player.state.used) and (up is None or up == player.state.up):
+                    players.append(player)
+        return players
 
     def pitch_to_reserves(self, player):
         """
@@ -831,7 +1097,7 @@ class Game:
         :param min_players: The minimum number of players in the area.
         :return: True if team is setup legally in the specified tile area.
         """
-        min_players_checked = min(min_players, len([player for player in team.players if player.state.up]))
+        min_players_checked = min(min_players, len(self.get_reserves(team)) + len(self.get_players_on_pitch(team)))
         cnt = 0
         for y in range(len(self.state.pitch.board)):
             for x in range(len(self.state.pitch.board[y])):
@@ -863,16 +1129,6 @@ class Game:
             return self.state.home_team
         elif self.state.home_team.state.score < self.state.away_team.state.score:
             return self.state.away_team
-        return None
-
-    def get_winner(self):
-        """
-        :return: The agent with most touchdowns, otherwise None.
-        """
-        if self.state.home_team.state.score > self.state.away_team.state.score:
-            return self.home_agent
-        elif self.state.home_team.state.score < self.state.away_team.state.score:
-            return self.away_agent
         return None
 
     def is_setup_legal_scrimmage(self, team, min_players=3):
@@ -913,6 +1169,8 @@ class Game:
         return procs
 
     def get_player_action_type(self, player):
+        if self.state.game_over:
+            return None
         proc = self.state.stack.peek()
         if isinstance(proc, PlayerAction):
             return proc.player_action_type
@@ -934,10 +1192,79 @@ class Game:
             for player in team.players:
                 player.team = team
 
-    def winner(self):
-        assert self.state.game_over
-        if self.state.home_team.state.score > self.state.away_team.state.score:
-            return self.home_agent
-        elif self.state.home_team.state.score < self.state.away_team.state.score:
+    def termination_time(self):
+        """
+        The time at which the current turn must be terminated - or the opponent's action choice (like selecting block die).
+        """
+        if self.state.termination_opp is not None:
+            return self.state.termination_opp
+        return self.state.termination_turn
+
+    def timed_out(self):
+        """
+        Returns true if the game timed out - i.e. it was longer than the allowed self.config.time_limits.game - only if in competition mode.
+        """
+        if not self.config.competition_mode:
+            return
+        if self.end_time is None or self.start_time is None:
+            return False
+        return self.end_time - self.start_time > self.config.time_limits.game
+
+    def team_by_id(self, team_id):
+        if self.state.home_team.team_id == team_id:
+            return self.state.home_team
+        if self.state.away_team.team_id == team_id:
+            return self.state.away_team
+
+    def get_winner(self):
+        """
+        returns the winning agent of the game. None if it's a draw.
+        If the game timed out the current player loses.
+        A disqualified player will lose.
+        If the game is over, the team with most TDs win.
+        """
+        # Disqualified players lose
+        if self.disqualified_agent is not None:
+            return self.other_agent(self.disqualified_agent)
+        
+        # If game timed out the current player lost
+        if self.timed_out():
+            if self.home_agent == self.actor:
+                return self.away_agent
+            elif self.away_agent == self.actor:
+                return self.home_agent
+        
+        # If the game is over the player with most TDs wins
+        if self.state.game_over:
+            return self.team_agent(self.get_winning_team())
+        
+        return None
+
+    def other_agent(self, agent):
+        """
+        Returns the other agent in the game.
+        """
+        if agent is None:
+            return None
+        if agent == self.home_agent:
             return self.away_agent
+        return self.home_agent
+
+    def active_other_player_id(self):
+        """
+        Returns the player id of the other player involved in current procedures - if any.
+        """
+        for proc in self.state.stack.items:
+            if isinstance(proc, Block):
+                if proc.defender is not None:
+                    return proc.defender.player_id
+            if isinstance(proc, PassAction):
+                if proc.catcher is not None:
+                    return proc.catcher.player_id
+            if isinstance(proc, Handoff):
+                if proc.catcher is not None:
+                    return proc.catcher.player_id
+            if isinstance(proc, Push):
+                if proc.catcher is not None:
+                    return proc.player.player_id
         return None

@@ -184,6 +184,7 @@ class OutcomeType(Enum):
     END_OF_GAME_DRAW = 133
     PLAYER_HEATED = 134
     PLAYER_NOT_HEATED = 135
+    END_OF_GAME_DISQUALIFICATION = 136
 
 
 class PlayerActionType(Enum):
@@ -398,6 +399,8 @@ class Skill(Enum):
     STRIP_BALL = 67
     GRAB = 68
     STAKES = 69
+    ANIMOSITY = 70
+    PILING_ON = 71
 
 
 class PassDistance(Enum):
