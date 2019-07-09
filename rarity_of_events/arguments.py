@@ -47,7 +47,7 @@ rarity_of_events = False
 eb_capacity = 100
 
 # Used when training is resumed after stop
-resume = True
+resume = False
 log = True
 
 # Rendering
