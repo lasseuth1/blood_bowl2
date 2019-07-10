@@ -158,7 +158,7 @@ class FFAIEnv(gym.Env):
         self.config = config
         self.config.competition_mode = False
         self.config.fast_mode = True
-        self.config.time_limits = None
+        # self.config.time_limits = None
         self.game = None
         self.team_id = None
         self.ruleset = get_rule_set(config.ruleset, all_rules=False)
