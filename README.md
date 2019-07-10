@@ -25,7 +25,7 @@ The results mentioned above, uses a different reward function and can be altered
 
 ## Reproducibility 
 
-Before getting started:
+**Before getting started:**
 * We recommend to use Anaconda (or other similar software) for package management.
 * The project is implemented using python3.6
 * Install Pytorch installed (https://pytorch.org/ )
