@@ -20,8 +20,10 @@ class FFPolicy(nn.Module):
         policy[~actions_mask] = float('-inf')  # Masking step: Inspired by: http://juditacs.github.io/2018/12/27/masked-attention.html
         policy = F.softmax(policy, dim=1)
 
-        actions = policy.multinomial(1)
-
+        try:
+            actions = policy.multinomial(1)
+        except:
+            print()
         return value, actions
 
     def evaluate_actions(self, spatial_inputs, non_spatial_input, actions, actions_mask):
@@ -30,7 +32,9 @@ class FFPolicy(nn.Module):
 
         # actions_mask = actions_mask.view(-1, 1, 242).squeeze()
         # actions_mask = actions_mask.view(-1, 1, 1078).squeeze()
+        # 3v3
         # actions_mask = actions_mask.view(-1, 1, 492).squeeze()
+        # 5v5
         actions_mask = actions_mask.view(-1, 1, 908).squeeze()
 
         policy[~actions_mask] = float('-inf')

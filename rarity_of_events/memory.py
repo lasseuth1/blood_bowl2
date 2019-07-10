@@ -15,7 +15,9 @@ class Memory(object):
         # action_space = 242 # 1v1
         # action_space = 1078  # 3v3
         # action_space = 530
+        # 3v3
         # action_space = 492
+        # 5v5
         action_space = 908
         self.available_actions = torch.zeros(num_steps + 1, num_processes, action_space, dtype=torch.uint8)
 

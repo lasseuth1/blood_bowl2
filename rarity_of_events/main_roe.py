@@ -80,6 +80,11 @@ def main():
                 Variable(memory.spatial_obs[step]),
                 Variable(memory.non_spatial_obs[step]), available_actions)
 
+            # 3v3
+            # actions, x_positions, y_positions = utils.map_actions_3v3_new_approach(actions_policy, active_players,
+            #                                                                       own_players)
+
+            # 5v5
             actions, x_positions, y_positions = utils.map_actions_5v5_pruned(actions_policy, active_players,
                                                                                    own_players)
             action_objects = []

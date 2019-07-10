@@ -205,6 +205,7 @@ def worker(remote, parent_remote, env):
 
             reports_one_step = len(env.game.state.reports) if env.game.state.reports is not None else 0
 
+
             obs, reward, done, info = env.step(action)
 
             if info is not None:
@@ -245,10 +246,16 @@ def worker(remote, parent_remote, env):
 
         elif command == 'actions':
 
-            mask = torch.zeros(908, dtype=torch.uint8)
-            available_actions = env.available_action_types()
+            # 3v3 mask
+            # mask = torch.zeros(492, dtype=torch.uint8)
             # actions_dictionary = utils.create_action_dictionary_3v3_new_approach()
+
+            # 5v5 mask
+            mask = torch.zeros(908, dtype=torch.uint8)
             actions_dictionary = utils.create_action_dictionary_5v5_pruned()
+
+            # All board sizes
+            available_actions = env.available_action_types()
 
             for avail_action in available_actions:
                 for action_dict in actions_dictionary:

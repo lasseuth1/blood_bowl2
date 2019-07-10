@@ -49,15 +49,18 @@ def main():
         log_file = "logs/" + args.log_filename
         with open(log_file) as log:
             lines = log.readlines()[-1]
-            resume_episodes = float(lines.split(", ")[1])
             resume_updates = float(lines.split(", ")[0])
-            resume_steps = float(lines.split(", ")[2])
+            resume_episodes = float(lines.split(", ")[1])
+            resume_steps = float(lines.split(", ")[3])
     else:
-        resume_episodes = 0
         resume_updates = 0
+        resume_episodes = 0
         resume_steps = 0
 
     renderer = Renderer()
+
+    rewards = 0
+    episodes = 0
 
     for update in range(args.num_updates):
 
@@ -71,8 +74,13 @@ def main():
                 Variable(memory.spatial_obs[step]),
                 Variable(memory.non_spatial_obs[step]), available_actions)
 
-            actions, x_positions, y_positions = utils.map_actions_3v3_new_approach(actions_policy, active_players,
-                                                                                   own_players)
+            # 3v3
+            # actions, x_positions, y_positions = utils.map_actions_3v3_new_approach(actions_policy, active_players,
+            #                                                                       own_players)
+
+            # 5v5
+            actions, x_positions, y_positions = utils.map_actions_5v5_pruned(actions_policy, active_players,
+                                                                             own_players)
             action_objects = []
 
             for action, position_x, position_y in zip(actions, x_positions, y_positions):
@@ -84,16 +92,19 @@ def main():
                     }
                 action_objects.append(action_object)
 
-            obs, reward, done, info = envs.step(action_objects)
+            obs, reward, done, info, events = envs.step(action_objects)
 
             if args.render:
                 for i in range(args.num_processes):
                     renderer.render(obs[i], i)
 
             reward = torch.from_numpy(np.expand_dims(np.stack(reward), 1)).float()
+            rewards += reward.sum().item()
 
             # If done then clean the history of observations.
             masks = torch.FloatTensor([[0.0] if done_ else [1.0] for done_ in done])
+            dones = masks.squeeze()
+            episodes += args.num_processes - dones.sum().item()
 
             # Update the observations returned by the environment
             spatial_obs, non_spatial_obs = update_obs(obs)
@@ -145,24 +156,24 @@ def main():
         if (update + 1) % args.log_interval == 0 and args.log:
             log_file_name = "logs/" + args.log_filename
 
-            episodes, steps, rewards, wins, touchdowns = envs.log()
-            updates = resume_updates + update + 1
-            this_episodes = episodes.sum()
-            resume_episodes += this_episodes
-            steps = updates * args.num_processes * args.num_steps
-            reward = rewards.sum()
-            wins = wins.sum()
-            touchdowns = touchdowns.sum()
+            # Updates
+            updates = update + 1
+            resume_updates += updates
+            # Episodes
+            resume_episodes += episodes
+            # Steps
+            steps = args.num_processes * args.num_steps
+            resume_steps += steps
+            # Rewards
+            reward = rewards
 
+            mean_reward_pr_episode = reward / episodes
 
-            log = "Updates {}, Episodes {}, Episodes this update {}, Timesteps {}, Reward {}, Wins {}, " \
-                  "Touchdowns {}" \
-                .format(updates, resume_episodes, this_episodes, steps, reward, wins, touchdowns
-                        )
+            log = "Updates {}, Episodes {}, Episodes this update {}, Total Timesteps {}, Reward {}, Mean Reward pr. Episode {:.2f}"\
+                .format(resume_updates, resume_episodes, episodes, resume_steps, reward, mean_reward_pr_episode)
 
-            log_to_file = "{}, {}, {}, {}, {}, {}, \n" \
-                .format(updates, resume_episodes, this_episodes, steps, reward, wins, touchdowns
-                        )
+            log_to_file = "{}, {}, {}, {}, {}, {}\n" \
+                .format(resume_updates, resume_episodes, episodes, resume_steps, reward, mean_reward_pr_episode)
 
             print(log)
 
@@ -172,6 +183,9 @@ def main():
 
             # Saving the agent
             torch.save(ac_agent, "models/" + args.model_name)
+
+            rewards = 0
+            episodes = 0
 
 
 def update_obs(observations):
