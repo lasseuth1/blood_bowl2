@@ -12,11 +12,14 @@ class Memory(object):
         self.actions = torch.zeros(num_steps, num_processes, action_shape)
         self.actions = self.actions.long()
         self.masks = torch.ones(num_steps + 1, num_processes, 1)
-        # action_space = 242 # 1v1
         # action_space = 1078  # 3v3
         # action_space = 530
+        # 1v1
+        # action_space = 242
+        
         # 3v3
         # action_space = 492
+        
         # 5v5
         action_space = 908
         self.available_actions = torch.zeros(num_steps + 1, num_processes, action_space, dtype=torch.uint8)
