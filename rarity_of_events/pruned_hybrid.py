@@ -29,11 +29,14 @@ class FFPolicy(nn.Module):
     def evaluate_actions(self, spatial_inputs, non_spatial_input, actions, actions_mask):
         # gets values, actions, and positions
         value, policy = self(spatial_inputs, non_spatial_input)
-
-        # actions_mask = actions_mask.view(-1, 1, 242).squeeze()
         # actions_mask = actions_mask.view(-1, 1, 1078).squeeze()
+        
+        # 1v1
+        # actions_mask = actions_mask.view(-1, 1, 242).squeeze()
+        
         # 3v3
         # actions_mask = actions_mask.view(-1, 1, 492).squeeze()
+        
         # 5v5
         actions_mask = actions_mask.view(-1, 1, 908).squeeze()
 
@@ -60,6 +63,10 @@ class PrunedHybrid(FFPolicy):
 
         # Linear layers
         self.linear1 = nn.Linear(50, 25)
+        
+        # # The outputs for 1v1
+        # self.critic = nn.Linear(409, 1)
+        # self.actor = nn.Linear(409, 242)
 
         # # The outputs for 3v3
         # self.critic = nn.Linear(1945, 1)
