@@ -35,26 +35,26 @@ The results mentioned above, uses a different reward function and can be altered
 
 In order to switch between board sizes, change the variable board_size in ``arguments.py``
 
-As of know,  when switching between board sizes, there are several places in the code where changes must be made manually in order for the program to run. Now, the code is set-up for 5v5 and please note the approach used for mapping the nodes in the output layer to actions in the game is not at the moment included at the moment in this repository – solely 3v3 and 5v5.
+As of know,  when switching between board sizes, there are several places in the code where changes must be made manually in order for the program to run. Now, the code is set-up for 5v5.
 
-The following files contains commented lines such as: # 3v3 and # 5v5, which is where the lines following must be either commented, or commented out, depending on the variant of the board:
+The following files contains commented lines such as: # 1v1, # 3v3 and # 5v5, which is where the lines following must be either commented, or commented out, depending on the variant of the board:
 
 **main.py** and **main_roe**:
 * These are quite similar, but ``main_roe.py`` is used for Rarity of Events. 
-Search for # 3v3 or # 5v5.
+Search for # 1v1 or # 3v3 or # 5v5.
 
 **memory.py:**
 * This is where observations of each timestep are stored. The action_space must be changed to fit the board size.
-Search for # 3v3 or # 5v5.
+Search for # 1v1 or # 3v3 or # 5v5.
 
 **pruned_hybrid.py:**
 * The model/architecture file.
 The sizes of the layers changes when the board size is changed.  The change should be made in the ``__init__`` function of the PrunhedHybrid class (line 49-69).
-Search for # 3v3 or # 5v5.
+Search for # 1v1 or # 3v3 or # 5v5.
 
 **vec_env.py** and **vec_env_roe.py:**
 * The files we use to run parallel FFAI environments. Again, the files are similar, but ``vec_env_roe.py`` is used for implemented Rarity of Events for each environment.
-Search for # 3v3 or # 5v5.
+Search for # 1v1 or # 3v3 or # 5v5.
 
 
 
