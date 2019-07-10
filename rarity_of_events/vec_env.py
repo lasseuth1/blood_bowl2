@@ -246,6 +246,10 @@ def worker(remote, parent_remote, env):
 
         elif command == 'actions':
 
+            # 1v1 mask
+            # mask = torch.zeros(242, dtype=torch.uint8)
+            # actions_dictionary = utils.create_action_dictionary_1v1()
+            
             # 3v3 mask
             # mask = torch.zeros(492, dtype=torch.uint8)
             # actions_dictionary = utils.create_action_dictionary_3v3_new_approach()
